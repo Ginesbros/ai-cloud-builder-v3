@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ai-cloud-builder-api
+    env: node
+    plan: starter
+    buildCommand: npm install && npx playwright install --with-deps chromium
+    startCommand: npm start
+
+  - type: worker
+    name: ai-cloud-builder-worker
+    env: node
+    plan: starter
+    buildCommand: npm install && npx playwright install --with-deps chromium
+    startCommand: npm run worker
