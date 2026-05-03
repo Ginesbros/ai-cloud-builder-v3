@@ -52,7 +52,7 @@ export async function createProject({
     projectId: projectSeed.id
   });
 
-  const projectName = safeName(name || plan.projectName);
+  const projectName = safeName(name || plan.projectName || "ai-project");
 
   const { data: project, error } = await supabase
     .from("projects")
@@ -69,19 +69,21 @@ export async function createProject({
 
   if (error) throw error;
 
-  const tasks = plan.tasks.map((task, index) => ({
+  const tasks = (plan.tasks || []).map((task, index) => ({
     project_id: project.id,
-    title: task.title,
-    description: task.description,
+    title: task.title || `Task ${index + 1}`,
+    description: task.description || "No description provided.",
     type: task.type || "development",
     priority: task.priority ?? index + 1
   }));
 
-  const { error: taskError } = await supabase
-    .from("tasks")
-    .insert(tasks);
+  if (tasks.length > 0) {
+    const { error: taskError } = await supabase
+      .from("tasks")
+      .insert(tasks);
 
-  if (taskError) throw taskError;
+    if (taskError) throw taskError;
+  }
 
   await logEvent({
     projectId: project.id,
@@ -133,10 +135,10 @@ export async function getProject(projectId) {
 
   return {
     project,
-    tasks,
-    files,
-    logs,
-    sandboxRuns,
+    tasks: tasks || [],
+    files: files || [],
+    logs: logs || [],
+    sandboxRuns: sandboxRuns || [],
     budget: {
       monthlySpend,
       config: getBudgetConfig()
@@ -155,6 +157,10 @@ async function getFiles(projectId) {
 
 async function upsertFiles(projectId, files) {
   for (const file of files || []) {
+    if (!file.path || typeof file.content !== "string") {
+      continue;
+    }
+
     await supabase.from("project_files").upsert({
       project_id: projectId,
       path: file.path,
@@ -213,7 +219,7 @@ export async function runSpecificTask(projectId, task) {
       existingFiles: await getFiles(projectId)
     });
 
-    await upsertFiles(projectId, result.files);
+    await upsertFiles(projectId, result.files || []);
 
     let verified = false;
     let lastError = null;
@@ -248,7 +254,7 @@ export async function runSpecificTask(projectId, task) {
           loopNumber: loop + 1
         });
 
-        await upsertFiles(projectId, fix.files);
+        await upsertFiles(projectId, fix.files || []);
 
         for (const command of fix.commandsToRun || ["npm install", "npm run build"]) {
           await runSandboxCommand({
@@ -392,5 +398,4 @@ export async function runAutonomousProject(projectId) {
     steps: results.length,
     results
   };
-}
 }
