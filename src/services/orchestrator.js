@@ -13,17 +13,17 @@ import {
   getMonthlyEstimatedSpend
 } from "./budget.js";
 
-const safeName = value => (value || `ai-project-${Date.now()}`)
-  .toLowerCase()
-  .replace(/[^a-z0-9-]/g, "-")
-  .replace(/-+/g, "-")
-  .replace(/^-|-$/g, "");
+const safeName = (value) =>
+  (value || `ai-project-${Date.now()}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 
-export async function createProject({
-  goal,
-  name,
-  autonomyMode = "dev"
-}) {
+// =========================
+// CREATE PROJECT
+// =========================
+export async function createProject({ goal, name, autonomyMode = "dev" }) {
   const cfg = getBudgetConfig();
 
   const { data: projectSeed, error: seedError } = await supabase
@@ -97,6 +97,9 @@ export async function createProject({
   };
 }
 
+// =========================
+// GET PROJECT
+// =========================
 export async function getProject(projectId) {
   const { data: project, error } = await supabase
     .from("projects")
@@ -112,40 +115,15 @@ export async function getProject(projectId) {
     .eq("project_id", projectId)
     .order("priority");
 
-  const { data: files } = await supabase
-    .from("project_files")
-    .select("path,sha,updated_at")
-    .eq("project_id", projectId);
-
-  const { data: logs } = await supabase
-    .from("logs")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(25);
-
-  const { data: sandboxRuns } = await supabase
-    .from("sandbox_runs")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(10);
-
-  const monthlySpend = await getMonthlyEstimatedSpend().catch(() => null);
-
   return {
     project,
-    tasks: tasks || [],
-    files: files || [],
-    logs: logs || [],
-    sandboxRuns: sandboxRuns || [],
-    budget: {
-      monthlySpend,
-      config: getBudgetConfig()
-    }
+    tasks: tasks || []
   };
 }
 
+// =========================
+// HELPERS
+// =========================
 async function getFiles(projectId) {
   const { data } = await supabase
     .from("project_files")
@@ -157,54 +135,33 @@ async function getFiles(projectId) {
 
 async function upsertFiles(projectId, files) {
   for (const file of files || []) {
-    if (!file.path || typeof file.content !== "string") {
-      continue;
-    }
+    if (!file.path || typeof file.content !== "string") continue;
 
-    await supabase.from("project_files").upsert({
-      project_id: projectId,
-      path: file.path,
-      content: file.content,
-      updated_at: new Date().toISOString()
-    }, {
-      onConflict: "project_id,path"
-    });
+    await supabase.from("project_files").upsert(
+      {
+        project_id: projectId,
+        path: file.path,
+        content: file.content,
+        updated_at: new Date().toISOString()
+      },
+      {
+        onConflict: "project_id,path"
+      }
+    );
   }
 }
 
-async function verify({ project, task, result }) {
-  for (const command of result.commandsToRun || []) {
-    await runSandboxCommand({
-      projectId: project.id,
-      taskId: task.id,
-      command
-    });
-  }
-
-  if (result.needsSmokeTest !== false) {
-    await runSmokeForProject({
-      projectId: project.id,
-      taskId: task.id
-    });
-  }
-}
-
+// =========================
+// RUN TASK
+// =========================
 export async function runSpecificTask(projectId, task) {
-  const { data: project, error: projectError } = await supabase
+  const { data: project } = await supabase
     .from("projects")
     .select("*")
     .eq("id", projectId)
     .single();
 
-  if (projectError) throw projectError;
-
   await assertBudgetAvailable({ projectId });
-
-  await supabase.from("projects").update({
-    status: "building",
-    current_stage: task.type,
-    updated_at: new Date().toISOString()
-  }).eq("id", projectId);
 
   await logEvent({
     projectId,
@@ -212,190 +169,93 @@ export async function runSpecificTask(projectId, task) {
     message: `Running task: ${task.title}`
   });
 
+  let result = await executeDevelopmentTask({
+    project,
+    task,
+    existingFiles: await getFiles(projectId)
+  });
+
+  await upsertFiles(projectId, result.files || []);
+
   try {
-    let result = await executeDevelopmentTask({
-      project,
-      task,
-      existingFiles: await getFiles(projectId)
+    for (const command of result.commandsToRun || []) {
+      await runSandboxCommand({
+        projectId,
+        taskId: task.id,
+        command
+      });
+    }
+
+    await runSmokeForProject({
+      projectId,
+      taskId: task.id
     });
-
-    await upsertFiles(projectId, result.files || []);
-
-    let verified = false;
-    let lastError = null;
-    const maxDebug = Number(process.env.MAX_DEBUG_LOOPS || 2);
-
-    for (let loop = 0; loop <= maxDebug; loop++) {
-      try {
-        await verify({ project, task, result });
-        verified = true;
-        break;
-      } catch (error) {
-        lastError = error;
-
-        if (loop >= maxDebug) break;
-
-        await logEvent({
-          projectId,
-          taskId: task.id,
-          level: "error",
-          message: "Verification failed. Running debugger.",
-          data: {
-            loop: loop + 1,
-            error: error.message
-          }
-        });
-
-        const fix = await debugFailure({
-          project,
-          task,
-          error: error.message,
-          files: await getFiles(projectId),
-          loopNumber: loop + 1
-        });
-
-        await upsertFiles(projectId, fix.files || []);
-
-        for (const command of fix.commandsToRun || ["npm install", "npm run build"]) {
-          await runSandboxCommand({
-            projectId,
-            taskId: task.id,
-            command
-          });
-        }
-
-        result.debugFix = fix;
-      }
-    }
-
-    if (!verified) {
-      throw lastError || new Error("Verification failed.");
-    }
-
-    const review = await reviewProject({
+  } catch (error) {
+    const fix = await debugFailure({
       project,
       task,
+      error: error.message,
       files: await getFiles(projectId)
     });
 
-    result.review = review;
-
-    const repo = await createRepoIfNeeded(project);
-
-    await upsertFilesToGitHub({
-      projectId,
-      repoName: repo.repoName
-    });
-
-    await supabase.from("tasks").update({
-      status: "complete",
-      result,
-      assigned_worker_id: null,
-      locked_until: null,
-      updated_at: new Date().toISOString()
-    }).eq("id", task.id);
-
-    await supabase.from("projects").update({
-      repo_name: repo.repoName,
-      repo_url: repo.repoUrl,
-      status: "building",
-      updated_at: new Date().toISOString()
-    }).eq("id", projectId);
-
-    await logEvent({
-      projectId,
-      taskId: task.id,
-      message: "Task complete and verified.",
-      data: result
-    });
-
-    return {
-      task,
-      result,
-      repo
-    };
-  } catch (error) {
-    const maxRetries = Number(process.env.MAX_TASK_RETRIES || 3);
-    const nextStatus = task.attempts >= maxRetries ? "failed" : "pending";
-
-    await supabase.from("tasks").update({
-      status: nextStatus,
-      error: error.message,
-      assigned_worker_id: null,
-      locked_until: null,
-      updated_at: new Date().toISOString()
-    }).eq("id", task.id);
-
-    await logEvent({
-      projectId,
-      taskId: task.id,
-      level: "error",
-      message: "Task failed.",
-      data: {
-        error: error.message,
-        nextStatus
-      }
-    });
-
-    throw error;
+    await upsertFiles(projectId, fix.files || []);
+    result.debugFix = fix;
   }
+
+  const review = await reviewProject({
+    project,
+    task,
+    files: await getFiles(projectId)
+  });
+
+  result.review = review;
+
+  const repo = await createRepoIfNeeded(project);
+
+  await upsertFilesToGitHub({
+    projectId,
+    repoName: repo.repoName
+  });
+
+  await supabase.from("tasks").update({
+    status: "complete",
+    result
+  }).eq("id", task.id);
+
+  return { result };
 }
 
+// =========================
+// RUN NEXT
+// =========================
 export async function runNextTask(projectId) {
-  const { data: task, error } = await supabase
+  const { data: task } = await supabase
     .from("tasks")
     .select("*")
     .eq("project_id", projectId)
     .eq("status", "pending")
-    .order("priority")
     .limit(1)
     .maybeSingle();
 
-  if (error) throw error;
-
   if (!task) {
-    await supabase.from("projects").update({
-      status: "complete",
-      current_stage: "complete",
-      updated_at: new Date().toISOString()
-    }).eq("id", projectId);
-
-    await logEvent({
-      projectId,
-      message: "Project complete."
-    });
-
-    return {
-      done: true,
-      message: "No pending tasks."
-    };
+    return { done: true };
   }
 
-  await supabase.from("tasks").update({
-    status: "running",
-    attempts: task.attempts + 1
-  }).eq("id", task.id);
-
-  return runSpecificTask(projectId, {
-    ...task,
-    attempts: task.attempts + 1
-  });
+  return runSpecificTask(projectId, task);
 }
 
+// =========================
+// AUTONOMOUS LOOP
+// =========================
 export async function runAutonomousProject(projectId) {
-  const maxTasks = Number(process.env.MAX_PROJECT_TASKS || 20);
   const results = [];
 
-  for (let i = 0; i < maxTasks; i++) {
+  for (let i = 0; i < 20; i++) {
     const result = await runNextTask(projectId);
     results.push(result);
 
     if (result.done) break;
   }
 
-  return {
-    projectId,
-    steps: results.length,
-    results
-  };
+  return results;
 }
