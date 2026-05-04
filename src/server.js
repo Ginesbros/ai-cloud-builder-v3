@@ -2,8 +2,16 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { z } from "zod";
-import { createProject, getProject, runNextTask, runAutonomousProject } from "./services/orchestrator.js";
-import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
+import {
+  createProject,
+  getProject,
+  runNextTask,
+  runAutonomousProject
+} from "./services/orchestrator.js";
+import {
+  getBudgetConfig,
+  getMonthlyEstimatedSpend
+} from "./services/budget.js";
 
 dotenv.config();
 
@@ -12,14 +20,29 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "ai-cloud-builder-v3" });
+  res.json({
+    ok: true,
+    service: "ai-cloud-builder-v3"
+  });
 });
 
 app.get("/api/budget", async (_req, res) => {
-  res.json({
-    config: getBudgetConfig(),
-    monthlyEstimatedSpend: await getMonthlyEstimatedSpend()
-  });
+  try {
+    const monthlyEstimatedSpend = await getMonthlyEstimatedSpend();
+
+    res.json({
+      ok: true,
+      config: getBudgetConfig(),
+      monthlyEstimatedSpend
+    });
+  } catch (error) {
+    console.error("Budget endpoint error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: error?.message || JSON.stringify(error)
+    });
+  }
 });
 
 app.post("/api/projects", async (req, res) => {
@@ -30,37 +53,71 @@ app.post("/api/projects", async (req, res) => {
       autonomyMode: z.enum(["safe", "dev", "autonomous"]).optional()
     }).parse(req.body);
 
-    res.json(await createProject(body));
+    const result = await createProject(body);
+    res.json(result);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error("Create project error:", error);
+
+    res.status(400).json({
+      ok: false,
+      error: error?.message || JSON.stringify(error)
+    });
   }
 });
 
 app.get("/api/projects/:projectId", async (req, res) => {
   try {
-    res.json(await getProject(req.params.projectId));
+    const result = await getProject(req.params.projectId);
+    res.json({
+      ok: true,
+      ...result
+    });
   } catch (error) {
-    res.status(404).json({ error: error.message });
+    console.error("Get project error:", error);
+
+    res.status(404).json({
+      ok: false,
+      error: error?.message || JSON.stringify(error)
+    });
   }
 });
 
 app.post("/api/projects/:projectId/run-next", async (req, res) => {
   try {
-    res.json(await runNextTask(req.params.projectId));
+    const result = await runNextTask(req.params.projectId);
+    res.json({
+      ok: true,
+      result
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Run next task error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: error?.message || JSON.stringify(error)
+    });
   }
 });
 
 app.post("/api/projects/:projectId/run-autonomous", async (req, res) => {
   try {
-    res.json(await runAutonomousProject(req.params.projectId));
+    const result = await runAutonomousProject(req.params.projectId);
+    res.json({
+      ok: true,
+      result
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Run autonomous error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: error?.message || JSON.stringify(error)
+    });
   }
 });
 
 const port = process.env.PORT || 3001;
+
 app.listen(port, () => {
   console.log(`AI Cloud Builder v3 running on port ${port}`);
 });
