@@ -129,6 +129,36 @@ app.get("/debug/env-safe", async (_req, res) => {
     supabaseKeyLength: supabaseKey.length
   });
 });
+app.get("/debug/supabase-test", async (_req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+
+    const { data, error } = await supabase
+      .from("ai_usage")
+      .select("id")
+      .limit(1);
+
+    res.json({
+      ok: !error,
+      data,
+      error: error
+        ? {
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+            code: error.code
+          }
+        : null
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      errorName: error?.name,
+      errorMessage: error?.message,
+      fullError: String(error)
+    });
+  }
+});
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => {
