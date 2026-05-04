@@ -115,7 +115,20 @@ app.post("/api/projects/:projectId/run-autonomous", async (req, res) => {
     });
   }
 });
+app.get("/debug/env-safe", async (_req, res) => {
+  const supabaseUrl = process.env.SUPABASE_URL || "";
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
+  res.json({
+    ok: true,
+    supabaseUrlPresent: Boolean(supabaseUrl),
+    supabaseUrl,
+    supabaseUrlHasRestV1: supabaseUrl.includes("/rest/v1"),
+    supabaseKeyPresent: Boolean(supabaseKey),
+    supabaseKeyStartsWith: supabaseKey.slice(0, 10),
+    supabaseKeyLength: supabaseKey.length
+  });
+});
 const port = process.env.PORT || 3001;
 
 app.listen(port, () => {
