@@ -1,50 +1,53 @@
-import dotenv from "dotenv";
-import { v4 as uuidv4 } from "uuid";
-import { claimNextTask } from "./services/taskLocks.js";
-import { runSpecificTask } from "./services/orchestrator.js";
+const WORKER_ID = "worker-" + Math.random().toString(36).slice(2);
 
-dotenv.config();
-
-const workerId = process.env.WORKER_ID || `worker-${uuidv4().slice(0, 8)}`;
-const pollMs = Number(process.env.WORKER_POLL_MS || 10000);
-const concurrency = Number(process.env.WORKER_CONCURRENCY || 1);
-const enabled = process.env.WORKER_ENABLED !== "false";
-
-const active = new Set();
-
-async function runClaimedTask(task) {
-  active.add(task.id);
-
-  try {
-    await runSpecificTask(task.project_id, task);
-  } catch (error) {
-    console.error("Worker task error:", error.message);
-  } finally {
-    active.delete(task.id);
-  }
-}
-
-async function loop() {
-  if (!enabled) {
-    console.log("Worker disabled.");
-    return;
-  }
-
-  console.log(`Worker started: ${workerId}, concurrency=${concurrency}`);
+async function startWorker() {
+  console.log("Worker started:", WORKER_ID);
 
   while (true) {
     try {
-      while (active.size < concurrency) {
-        const task = await claimNextTask({ workerId });
-        if (!task) break;
-        runClaimedTask(task);
-      }
-    } catch (error) {
-      console.error("Worker loop error:", error.message);
-    }
+      const { supabase } = await import("./lib/supabase.js");
+      const { runNextTask } = await import("./services/orchestrator.js");
 
-    await new Promise(resolve => setTimeout(resolve, pollMs));
+      // Get ONE pending task
+      const { data: task } = await supabase
+        .from("tasks")
+        .select("*")
+        .eq("status", "pending")
+        .is("assigned_worker_id", null)
+        .order("priority", { ascending: true })
+        .limit(1)
+        .single();
+
+      if (!task) {
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+
+      console.log("Claiming task:", task.title);
+
+      // Lock it
+      await supabase
+        .from("tasks")
+        .update({
+          status: "running",
+          assigned_worker_id: WORKER_ID,
+          locked_until: new Date(Date.now() + 60000).toISOString()
+        })
+        .eq("id", task.id)
+        .is("assigned_worker_id", null);
+
+      // Run it
+      await runNextTask(task.project_id);
+
+      console.log("Completed task:", task.title);
+
+      await new Promise(r => setTimeout(r, 1000));
+
+    } catch (err) {
+      console.error("Worker error:", err);
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
 }
 
-loop();
+startWorker();
