@@ -1,4 +1,16 @@
+import http from "http";
+
 const WORKER_ID = "worker-" + Math.random().toString(36).slice(2);
+const PORT = process.env.PORT || 3001;
+
+http
+  .createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, worker: WORKER_ID }));
+  })
+  .listen(PORT, () => {
+    console.log(`Worker health server running on port ${PORT}`);
+  });
 
 async function startWorker() {
   console.log("Worker started:", WORKER_ID);
@@ -8,7 +20,6 @@ async function startWorker() {
       const { supabase } = await import("./lib/supabase.js");
       const { runNextTask } = await import("./services/orchestrator.js");
 
-      // Get ONE pending task
       const { data: task } = await supabase
         .from("tasks")
         .select("*")
@@ -25,7 +36,6 @@ async function startWorker() {
 
       console.log("Claiming task:", task.title);
 
-      // Lock it
       await supabase
         .from("tasks")
         .update({
@@ -36,13 +46,11 @@ async function startWorker() {
         .eq("id", task.id)
         .is("assigned_worker_id", null);
 
-      // Run it
       await runNextTask(task.project_id);
 
       console.log("Completed task:", task.title);
 
       await new Promise(r => setTimeout(r, 1000));
-
     } catch (err) {
       console.error("Worker error:", err);
       await new Promise(r => setTimeout(r, 5000));
