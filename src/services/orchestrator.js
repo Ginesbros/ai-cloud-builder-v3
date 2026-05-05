@@ -5,6 +5,8 @@ import { getPipeline } from "../pipelines/index.js";
 import { debugFailure } from "../agents/debugger.js";
 import { reviewProject } from "../agents/reviewer.js";
 import { describeRouting } from "../agents/modelRouter.js";
+import { matchComponent, recordReuse } from "../agents/componentMatcher.js";
+import { maybeExtractComponent } from "../agents/componentExtractor.js";
 import { createRepoIfNeeded, upsertFilesToGitHub } from "./github.js";
 import { runSandboxCommand } from "../sandbox/sandboxManager.js";
 import { runSmokeForProject } from "../sandbox/smokeRunner.js";
@@ -306,19 +308,53 @@ export async function runSpecificTask(projectId, task) {
   const pipeline = getPipeline(project.kind || "freeform");
   const routing = describeRouting(task);
 
+  // Component memory lookup: see if we've built something similar before.
+  let match = { decision: "fresh", reason: "Skipped (non-code pipeline).", candidates: [] };
+  const isCodeTask = !(["design", "video", "docs", "specialist", "image", "assets"].includes(task.type));
+  if (isCodeTask) {
+    try {
+      match = await matchComponent({ project, task });
+    } catch (err) {
+      match = { decision: "fresh", reason: `matcher error: ${err.message}`, candidates: [] };
+    }
+  }
+
   await logEvent({
     projectId, taskId: task.id,
     message: `Running task: ${task.title}`,
-    data: { routing, kind: project.kind }
+    data: {
+      routing,
+      kind: project.kind,
+      libraryDecision: match.decision,
+      libraryReason: match.reason,
+      libraryMatch: match.chosen ? { name: match.chosen.name, similarity: match.chosen.similarity } : null
+    }
   });
 
   try {
     let result = await pipeline.executeTask({
       project,
       task,
-      existingFiles: await getFiles(projectId)
+      existingFiles: await getFiles(projectId),
+      libraryMatch: match // pipelines may consume this; webApp/staticSite/etc. accept it
     });
     result.routing = routing;
+    result.libraryDecision = match.decision;
+    if (match.chosen) {
+      result.libraryMatch = {
+        componentId: match.chosen.id,
+        name: match.chosen.name,
+        similarity: match.chosen.similarity
+      };
+      // Record the reuse event regardless of whether the developer accepted it.
+      await recordReuse({
+        componentId: match.chosen.id,
+        projectId,
+        taskId: task.id,
+        similarity: match.chosen.similarity,
+        decision: match.decision
+      });
+    }
 
     await upsertFiles(projectId, result.files || []);
     const savedDeliverables = await uploadDeliverables(projectId, task.id, result.deliverables || []);
@@ -398,10 +434,18 @@ export async function runSpecificTask(projectId, task) {
       updated_at: new Date().toISOString()
     }).eq("id", task.id);
 
+    // Component extraction: save the produced files to the global library if save-worthy.
+    // Skip when we just reused an existing component (no point saving a copy of itself).
+    if ((result.files || []).length > 0 && match.decision !== "reuse") {
+      maybeExtractComponent({ project, task, files: result.files }).catch(err => {
+        console.warn("Component extraction failed:", err?.message || err);
+      });
+    }
+
     await logEvent({
       projectId, taskId: task.id,
       message: "Task complete.",
-      data: { summary: result.summary, filesWritten: (result.files || []).length, deliverables: (result.deliverables || []).length }
+      data: { summary: result.summary, filesWritten: (result.files || []).length, deliverables: (result.deliverables || []).length, libraryDecision: match.decision }
     });
 
     return { task, result };

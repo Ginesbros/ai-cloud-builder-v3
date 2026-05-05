@@ -14,6 +14,7 @@ import {
 } from "./services/orchestrator.js";
 import { getDeliverableUrl } from "./lib/storage.js";
 import { listKinds } from "./pipelines/index.js";
+import { getTerms, hasAccepted, recordAcceptance, isBanned } from "./services/terms.js";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
 import { deployProjectToVercel } from "./services/vercel.js";
 
@@ -34,6 +35,44 @@ app.get("/health", (_req, res) => {
 });
 
 // --- Admin auth middleware (gates /debug and optionally /api) ---
+function getUserId(req) {
+  // Identity strategy: prefer authenticated user, fall back to anonymous
+  // browser fingerprint sent via x-user-id header. Dashboard generates a UUID
+  // on first visit and stores it in localStorage.
+  return (
+    req.header("x-user-id") ||
+    req.header("x-user-email") ||
+    req.ip ||
+    "anonymous"
+  );
+}
+
+async function requireTermsAccepted(req, res, next) {
+  try {
+    const userId = getUserId(req);
+    const ban = await isBanned(userId);
+    if (ban.banned) {
+      return res.status(403).json({
+        ok: false,
+        error: "Your access to the Service has been terminated.",
+        reason: ban.reason || null
+      });
+    }
+    const status = await hasAccepted(userId);
+    if (!status.accepted) {
+      return res.status(412).json({
+        ok: false,
+        error: "Terms of Service must be accepted before using this endpoint.",
+        currentTermsVersion: status.currentVersion,
+        acceptedVersion: status.acceptedVersion
+      });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+}
+
 function requireAdminToken(req, res, next) {
   const expected = process.env.ADMIN_TOKEN;
   if (!expected) return next(); // no token configured = open mode (dev)
@@ -75,6 +114,109 @@ app.get("/api/kinds", (_req, res) => {
   res.json({ ok: true, kinds: listKinds() });
 });
 
+// --- Terms of Service ---
+app.get("/api/terms", (_req, res) => {
+  const t = getTerms();
+  res.json({ ok: true, version: t.version, lastUpdated: t.lastUpdated, markdown: t.markdown });
+});
+
+app.get("/api/terms/status", async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const status = await hasAccepted(userId);
+    const ban = await isBanned(userId);
+    res.json({ ok: true, userId, ...status, banned: ban.banned, banReason: ban.reason || null });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+app.post("/api/terms/accept", async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const userEmail = req.body?.email || req.header("x-user-email") || null;
+    const ban = await isBanned(userId);
+    if (ban.banned) {
+      return res.status(403).json({ ok: false, error: "Account terminated.", reason: ban.reason });
+    }
+    const result = await recordAcceptance({
+      userId,
+      userEmail,
+      ipAddress: req.ip,
+      userAgent: req.header("user-agent") || null
+    });
+    res.json({ ok: true, ...result, userId });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message });
+  }
+});
+
+// --- Component library (shared memory of past builds) ---
+app.get("/api/library", async (req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+    const q = (req.query.q || "").toString().trim();
+    const kind = (req.query.kind || "").toString().trim();
+    let query = supabase
+      .from("build_components")
+      .select("id,name,description,tags,kind,task_type,reuse_count,pinned,created_at,source_project_id")
+      .eq("shared", true)
+      .order("reuse_count", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (kind) query = query.eq("kind", kind);
+    if (q) query = query.or(`name.ilike.%${q}%,description.ilike.%${q}%`);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ ok: true, components: data || [] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.get("/api/library/:id", async (req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+    const { data, error } = await supabase
+      .from("build_components")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error || !data) return res.status(404).json({ ok: false, error: "Not found." });
+    // Don't expose embedding in API response (huge + private).
+    delete data.embedding;
+    res.json({ ok: true, component: data });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/library/:id/pin", requireAdminToken, async (req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+    const pinned = Boolean(req.body?.pinned);
+    const { error } = await supabase
+      .from("build_components")
+      .update({ pinned, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.delete("/api/library/:id", requireAdminToken, async (req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+    const { error } = await supabase.from("build_components").delete().eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
 app.post("/api/projects/:projectId/clarifications", async (req, res) => {
   try {
     const body = z.object({ answers: z.array(z.string()) }).parse(req.body);
@@ -108,7 +250,7 @@ app.get("/api/deliverables/:id/download", async (req, res) => {
   }
 });
 
-app.post("/api/projects", async (req, res) => {
+app.post("/api/projects", requireTermsAccepted, async (req, res) => {
   try {
     const body = z
       .object({

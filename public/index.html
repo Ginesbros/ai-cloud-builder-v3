@@ -100,6 +100,7 @@
             <button class="tab" data-tab="logs">Logs</button>
             <button class="tab" data-tab="sandbox">Sandbox</button>
             <button class="tab" data-tab="spend">Spending</button>
+            <button class="tab" data-tab="library">Library</button>
           </nav>
 
           <div class="tab-panel" data-panel="tasks">
@@ -142,11 +143,47 @@
           <div class="tab-panel hidden" data-panel="spend">
             <div class="spend-grid" id="spend-grid"></div>
           </div>
+
+          <div class="tab-panel hidden" data-panel="library">
+            <div class="library-controls">
+              <input type="text" id="library-search" placeholder="Search library by name, tag, description…">
+              <select id="library-kind">
+                <option value="">All kinds</option>
+              </select>
+            </div>
+            <ul class="library-list" id="library-list"></ul>
+          </div>
         </div>
       </section>
     </main>
 
     <div id="toast" class="toast hidden"></div>
+
+    <!-- Terms of Service modal (first visit gate) -->
+    <div id="tos-modal" class="modal hidden">
+      <div class="modal-card">
+        <h2 class="modal-title">Before you build — our Terms of Service</h2>
+        <p class="muted" style="margin-bottom:14px">
+          Please read carefully. The most important parts:
+          <strong>we own the generated code, but you get a perpetual license to use it however you want.</strong>
+          We can also terminate access at our discretion.
+        </p>
+        <div id="tos-content" class="tos-scroll">Loading…</div>
+        <label class="tos-check">
+          <input type="checkbox" id="tos-check" />
+          I have read and agree to the Terms of Service.
+        </label>
+        <div class="modal-actions">
+          <a class="btn ghost" id="tos-decline" href="about:blank">I do not agree</a>
+          <button class="btn primary" id="tos-accept" disabled>Accept &amp; Continue</button>
+        </div>
+      </div>
+    </div>
+
+    <footer class="site-footer">
+      <a href="#" id="open-tos">Terms of Service</a>
+      <span class="muted">v<span id="tos-version">1.0.0</span></span>
+    </footer>
 
     <script src="/app.js"></script>
   </body>

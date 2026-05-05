@@ -31,12 +31,29 @@ function adminHeaders() {
   return t ? { "x-admin-token": t } : {};
 }
 
+function getOrCreateUserId() {
+  let id = localStorage.getItem("acb_user_id");
+  if (!id) {
+    // Cheap UUID v4-ish.
+    id = "u_" + ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+      (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & 15) >> (c / 4)).toString(16)
+    );
+    localStorage.setItem("acb_user_id", id);
+  }
+  return id;
+}
+
+function userHeaders() {
+  return { "x-user-id": getOrCreateUserId() };
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
     headers: {
       "Content-Type": "application/json",
       ...adminHeaders(),
+      ...userHeaders(),
       ...(opts.headers || {})
     }
   });
@@ -412,7 +429,150 @@ function escapeHtml(s) {
   ));
 }
 
+/* --- Terms of Service flow --- */
+async function checkTermsAndShowModal() {
+  try {
+    const status = await api("/api/terms/status");
+    document.getElementById("tos-version").textContent = status.currentVersion || "1.0.0";
+    if (status.banned) {
+      // Banned users see a hard message and can't dismiss.
+      const modal = document.getElementById("tos-modal");
+      modal.classList.remove("hidden");
+      document.getElementById("tos-content").textContent =
+        "Your access to the Service has been terminated." +
+        (status.banReason ? `\n\nReason: ${status.banReason}` : "");
+      document.querySelector(".tos-check").style.display = "none";
+      document.getElementById("tos-accept").style.display = "none";
+      return false;
+    }
+    if (!status.accepted) {
+      await openTosModal({ requireAcceptance: true });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("Terms status check failed:", err);
+    return false;
+  }
+}
+
+async function openTosModal({ requireAcceptance = false } = {}) {
+  const modal = document.getElementById("tos-modal");
+  const content = document.getElementById("tos-content");
+  const checkBox = document.getElementById("tos-check");
+  const acceptBtn = document.getElementById("tos-accept");
+
+  modal.classList.remove("hidden");
+  content.textContent = "Loading…";
+
+  try {
+    const t = await api("/api/terms");
+    content.textContent = t.markdown;
+    document.getElementById("tos-version").textContent = t.version;
+  } catch (err) {
+    content.textContent = `Could not load terms: ${err.message}`;
+  }
+
+  // Reset state.
+  checkBox.checked = false;
+  acceptBtn.disabled = true;
+  checkBox.onchange = () => { acceptBtn.disabled = !checkBox.checked; };
+
+  acceptBtn.onclick = async () => {
+    acceptBtn.disabled = true;
+    acceptBtn.textContent = "Saving…";
+    try {
+      await api("/api/terms/accept", { method: "POST", body: JSON.stringify({}) });
+      modal.classList.add("hidden");
+      toast("Terms accepted. Welcome.", "success");
+      // After accepting, kick off the regular boot.
+      bootAfterTerms();
+    } catch (err) {
+      toast(err.message, "error");
+      acceptBtn.disabled = false;
+      acceptBtn.textContent = "Accept & Continue";
+    }
+  };
+
+  if (!requireAcceptance) {
+    // "View terms" mode — user can close without re-accepting.
+    acceptBtn.textContent = "Close";
+    acceptBtn.disabled = false;
+    checkBox.parentElement.style.display = "none";
+    acceptBtn.onclick = () => {
+      modal.classList.add("hidden");
+      checkBox.parentElement.style.display = "";
+      acceptBtn.textContent = "Accept & Continue";
+    };
+  } else {
+    checkBox.parentElement.style.display = "";
+    acceptBtn.textContent = "Accept & Continue";
+  }
+}
+
+/* --- Library tab --- */
+async function loadLibrary() {
+  const ul = document.getElementById("library-list");
+  if (!ul) return;
+  const q = document.getElementById("library-search").value.trim();
+  const kind = document.getElementById("library-kind").value.trim();
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (kind) params.set("kind", kind);
+  ul.innerHTML = `<li class="muted">Loading…</li>`;
+  try {
+    const data = await api("/api/library?" + params.toString());
+    const items = data.components || [];
+    if (!items.length) {
+      ul.innerHTML = `<li class="muted">No saved components yet. They appear here as builds finish.</li>`;
+      return;
+    }
+    ul.innerHTML = items.map(c => `
+      <li>
+        <div>
+          <div class="l-name">${escapeHtml(c.name)} ${c.pinned ? '<span class="l-pin">★ pinned</span>' : ""}</div>
+          <div class="l-desc">${escapeHtml(c.description)}</div>
+          <div class="l-tags">
+            <span class="l-tag">${escapeHtml(c.kind)}</span>
+            ${(c.tags || []).map(t => `<span class="l-tag">${escapeHtml(t)}</span>`).join("")}
+          </div>
+        </div>
+        <div class="l-meta">
+          ${c.reuse_count} reuse${c.reuse_count === 1 ? "" : "s"}<br>
+          ${fmtRel(c.created_at)}
+        </div>
+      </li>
+    `).join("");
+  } catch (err) {
+    ul.innerHTML = `<li class="muted">Library failed: ${escapeHtml(err.message)}</li>`;
+  }
+}
+
+async function loadLibraryKinds() {
+  try {
+    const data = await api("/api/kinds");
+    const select = document.getElementById("library-kind");
+    for (const k of data.kinds || []) {
+      const opt = document.createElement("option");
+      opt.value = k; opt.textContent = k;
+      select.appendChild(opt);
+    }
+  } catch {}
+}
+
 /* --- Boot --- */
+async function bootAfterTerms() {
+  await loadBudget();
+  await loadProjects();
+
+  state.pollTimer = setInterval(() => {
+    if (state.current && !document.hidden) {
+      loadDetail();
+      loadBudget();
+    }
+  }, 8000);
+}
+
 async function init() {
   // Optional: prompt for admin token if /debug routes are protected.
   const t = new URLSearchParams(location.search).get("token");
@@ -421,16 +581,33 @@ async function init() {
     history.replaceState({}, "", location.pathname);
   }
 
-  await loadBudget();
-  await loadProjects();
+  await loadLibraryKinds();
 
-  // Auto-poll detail every 8s while watching a project.
-  state.pollTimer = setInterval(() => {
-    if (state.current && !document.hidden) {
-      loadDetail();
-      loadBudget();
-    }
-  }, 8000);
+  // Wire footer + library tab listeners (always available).
+  document.getElementById("open-tos").addEventListener("click", e => {
+    e.preventDefault();
+    openTosModal({ requireAcceptance: false });
+  });
+  const lsearch = document.getElementById("library-search");
+  const lkind = document.getElementById("library-kind");
+  if (lsearch) lsearch.addEventListener("input", debounce(loadLibrary, 350));
+  if (lkind) lkind.addEventListener("change", loadLibrary);
+
+  // Tab switch to library should load it (lazy).
+  document.querySelectorAll(".tab[data-tab='library']").forEach(btn => {
+    btn.addEventListener("click", loadLibrary);
+  });
+
+  // Gate everything else on terms acceptance.
+  const accepted = await checkTermsAndShowModal();
+  if (accepted) {
+    bootAfterTerms();
+  }
+}
+
+function debounce(fn, ms) {
+  let h;
+  return (...args) => { clearTimeout(h); h = setTimeout(() => fn(...args), ms); };
 }
 
 init();
