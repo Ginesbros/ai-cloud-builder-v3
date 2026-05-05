@@ -136,6 +136,7 @@ function renderDetail() {
 
   const chips = [];
   chips.push(`<span class="chip ${statusChipClass(p.status)}">status: ${p.status}</span>`);
+  if (p.kind) chips.push(`<span class="chip kind">kind: ${p.kind}</span>`);
   chips.push(`<span class="chip">autonomy: ${p.autonomy_mode}</span>`);
   if (p.repo_url) chips.push(`<span class="chip acc">repo: <a href="${p.repo_url}" target="_blank" rel="noopener">${p.repo_name}</a></span>`);
   if (p.vercel_url) chips.push(`<span class="chip acc">vercel: <a href="${p.vercel_url}" target="_blank" rel="noopener">live</a></span>`);
@@ -168,6 +169,23 @@ function renderDetail() {
     })
     .join("");
 
+  // Clarification banner
+  const banner = document.getElementById("clarification-banner");
+  const qContainer = document.getElementById("clarification-questions");
+  if (p.awaiting_clarification && Array.isArray(p.clarifications) && p.clarifications.length) {
+    banner.classList.remove("hidden");
+    qContainer.innerHTML = p.clarifications.map((q, i) => `
+      <div class="clarification-q">
+        <label>${escapeHtml(q.question)}</label>
+        <input type="text" data-q-index="${i}" value="${escapeHtml(q.suggestedAnswer || "")}" placeholder="Type your answer">
+        <div class="hint">${escapeHtml(q.why || "")}</div>
+      </div>
+    `).join("");
+  } else {
+    banner.classList.add("hidden");
+    qContainer.innerHTML = "";
+  }
+
   // Files
   $("#files-list").innerHTML = (d.files || [])
     .sort((a, b) => a.path.localeCompare(b.path))
@@ -179,6 +197,16 @@ function renderDetail() {
       </li>`
     )
     .join("") || `<li class="muted">No files yet.</li>`;
+
+  // Deliverables
+  $("#deliverables-list").innerHTML = (d.deliverables || []).map(dv => `
+    <li>
+      <div>
+        <div><span class="d-kind">${escapeHtml(dv.kind)}</span><span class="d-name">${escapeHtml(dv.filename)}</span></div>
+        <div class="d-meta">${escapeHtml(dv.generator || "—")} · ${formatBytes(dv.size_bytes)} · ${fmtRel(dv.created_at)}</div>
+      </div>
+      <a class="btn tiny" href="/api/deliverables/${dv.id}/download" target="_blank" rel="noopener">Download</a>
+    </li>`).join("") || `<li class="muted">No deliverables yet.</li>`;
 
   // Assets
   $("#assets-grid").innerHTML = (d.assets || []).map(a => {
@@ -256,6 +284,13 @@ function routingForType(type) {
   if (t === "backend" || t === "database" || t === "integration") return { agent: "developer", model: "gpt-4.1" };
   if (t === "review") return { agent: "reviewer", model: "claude+gemini+grok" };
   return { agent: "developer", model: "gpt-4.1-mini" };
+}
+
+function formatBytes(n) {
+  if (!n) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / (1024 * 1024)).toFixed(2) + " MB";
 }
 
 function statusChipClass(status) {
@@ -340,6 +375,26 @@ $("#btn-deploy").addEventListener("click", async () => {
     const data = await api(`/api/projects/${state.current}/deploy`, { method: "POST" });
     toast(data.result?.message || "Deploy handoff created.", "success");
     await loadDetail();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+$("#submit-clarifications").addEventListener("click", async () => {
+  if (!state.current) return;
+  const inputs = $$("#clarification-questions input[data-q-index]");
+  const answers = inputs.map(el => el.value || "");
+  if (answers.some(a => !a.trim())) {
+    toast("Please answer every question.", "error");
+    return;
+  }
+  try {
+    await api(`/api/projects/${state.current}/clarifications`, {
+      method: "POST",
+      body: JSON.stringify({ answers })
+    });
+    toast("Plan generated. Ready to build.", "success");
+    await Promise.all([loadDetail(), loadProjects()]);
   } catch (err) {
     toast(err.message, "error");
   }

@@ -1,17 +1,14 @@
 import { supabase } from "../lib/supabase.js";
 import { logEvent } from "../lib/logger.js";
-import { createPlan } from "../agents/planner.js";
-import { executeDevelopmentTask } from "../agents/developer.js";
-import { executeDesignTask } from "../agents/designer.js";
-import { executeSpecialistTask } from "../agents/specialist.js";
-import { executeVideoTask } from "../agents/videographer.js";
-import { executeLibrarianTask } from "../agents/librarian.js";
+import { classifyGoal } from "../agents/classifier.js";
+import { getPipeline } from "../pipelines/index.js";
 import { debugFailure } from "../agents/debugger.js";
 import { reviewProject } from "../agents/reviewer.js";
-import { describeRouting, getAgentForTaskType } from "../agents/modelRouter.js";
+import { describeRouting } from "../agents/modelRouter.js";
 import { createRepoIfNeeded, upsertFilesToGitHub } from "./github.js";
 import { runSandboxCommand } from "../sandbox/sandboxManager.js";
 import { runSmokeForProject } from "../sandbox/smokeRunner.js";
+import { saveDeliverable } from "../lib/storage.js";
 import {
   assertBudgetAvailable,
   getBudgetConfig,
@@ -25,7 +22,12 @@ const safeName = value =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-export async function createProject({ goal, name, autonomyMode = "dev" }) {
+/**
+ * Step 1: createProject — seeds the project, classifies the goal, and either:
+ *   - asks clarifying questions (sets awaiting_clarification=true), OR
+ *   - runs the pipeline planner and creates tasks immediately.
+ */
+export async function createProject({ goal, name, autonomyMode = "dev", attachedDocs = [] }) {
   const cfg = getBudgetConfig();
 
   const { data: projectSeed, error: seedError } = await supabase
@@ -36,8 +38,8 @@ export async function createProject({ goal, name, autonomyMode = "dev" }) {
       status: "planning",
       autonomy_mode: autonomyMode,
       monthly_budget_usd: cfg.monthlyBudget,
-      memory: { createdBy: "ai-cloud-builder-v3", budgetMode: cfg.mode },
-      current_stage: "planning"
+      memory: { createdBy: "ai-cloud-builder-v3", budgetMode: cfg.mode, attachedDocs: attachedDocs.map(d => d.filename || d.url) },
+      current_stage: "classifying"
     })
     .select()
     .single();
@@ -45,25 +47,87 @@ export async function createProject({ goal, name, autonomyMode = "dev" }) {
   if (seedError) throw seedError;
   await assertBudgetAvailable({ projectId: projectSeed.id });
 
-  const plan = await createPlan({ goal, projectId: projectSeed.id });
-  const projectName = safeName(name || plan.projectName || "ai-project");
+  // Classify the goal first.
+  const classification = await classifyGoal({ goal, projectId: projectSeed.id });
+  await logEvent({
+    projectId: projectSeed.id,
+    message: `Classified goal as kind=${classification.kind} (confidence=${classification.confidence.toFixed(2)})`,
+    data: classification
+  });
 
-  const { data: project, error } = await supabase
+  // If we need clarification, save state and return — the user must answer first.
+  if (classification.needsClarification && classification.clarifyingQuestions.length > 0) {
+    const { data: project, error } = await supabase
+      .from("projects")
+      .update({
+        kind: classification.kind,
+        awaiting_clarification: true,
+        clarifications: classification.clarifyingQuestions.map(q => ({ ...q, answer: null })),
+        current_stage: "awaiting_clarification",
+        status: "awaiting_clarification",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", projectSeed.id)
+      .select()
+      .single();
+    if (error) throw error;
+    return {
+      ok: true,
+      project,
+      tasksCreated: 0,
+      classification,
+      awaitingClarification: true,
+      questions: classification.clarifyingQuestions
+    };
+  }
+
+  // No clarification needed — run pipeline planner now.
+  return await planProject({
+    project: projectSeed,
+    goal,
+    name,
+    classification,
+    clarifications: [],
+    attachedDocs
+  });
+}
+
+/**
+ * Step 2: planProject — runs the pipeline's planTasks() and creates task rows.
+ * Called either right after createProject (no clarification) or after the user
+ * answers clarifying questions.
+ */
+async function planProject({ project, goal, name, classification, clarifications, attachedDocs = [] }) {
+  const pipeline = getPipeline(classification.kind);
+
+  const plan = await pipeline.planTasks({
+    project,
+    goal,
+    clarifications,
+    attachedDocs,
+    projectId: project.id
+  });
+
+  const projectName = safeName(name || classification.suggestedName || plan.projectName || "ai-project");
+
+  const { data: updated, error } = await supabase
     .from("projects")
     .update({
       name: projectName,
+      kind: classification.kind,
+      awaiting_clarification: false,
       status: "planned",
       plan,
       current_stage: "planned",
       updated_at: new Date().toISOString()
     })
-    .eq("id", projectSeed.id)
+    .eq("id", project.id)
     .select()
     .single();
   if (error) throw error;
 
   const tasks = (plan.tasks || []).map((task, index) => ({
-    project_id: project.id,
+    project_id: updated.id,
     title: task.title || `Task ${index + 1}`,
     description: task.description || "No description provided.",
     type: task.type || "development",
@@ -76,11 +140,51 @@ export async function createProject({ goal, name, autonomyMode = "dev" }) {
   }
 
   await logEvent({
-    projectId: project.id,
-    message: "Project created.",
-    data: { plan }
+    projectId: updated.id,
+    message: `Planned: ${tasks.length} tasks for kind=${classification.kind}`,
+    data: { plan, kind: classification.kind }
   });
-  return { ok: true, project, tasksCreated: tasks.length };
+  return { ok: true, project: updated, tasksCreated: tasks.length, classification };
+}
+
+/**
+ * Step 3 (optional): user answers clarifying questions, we plan + create tasks.
+ */
+export async function submitClarifications({ projectId, answers }) {
+  const { data: project, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .single();
+  if (error) throw error;
+
+  if (!project.awaiting_clarification) {
+    throw new Error("Project is not awaiting clarification.");
+  }
+
+  // Merge answers into stored clarifications.
+  const merged = (project.clarifications || []).map((q, i) => ({
+    ...q,
+    answer: answers[i] ?? q.suggestedAnswer ?? null
+  }));
+
+  await supabase
+    .from("projects")
+    .update({ clarifications: merged, awaiting_clarification: false, updated_at: new Date().toISOString() })
+    .eq("id", projectId);
+
+  // Build a richer goal that includes clarifications.
+  const enrichedGoal = `${project.goal}\n\nClarifications:\n${merged
+    .map((q, i) => `- Q: ${q.question}\n  A: ${q.answer}`)
+    .join("\n")}`;
+
+  return await planProject({
+    project,
+    goal: enrichedGoal,
+    name: project.name,
+    classification: { kind: project.kind, suggestedName: project.name },
+    clarifications: merged
+  });
 }
 
 export async function getProject(projectId) {
@@ -92,38 +196,27 @@ export async function getProject(projectId) {
   if (error) throw error;
 
   const { data: tasks } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("priority");
+    .from("tasks").select("*").eq("project_id", projectId).order("priority");
   const { data: files } = await supabase
-    .from("project_files")
-    .select("path,sha,updated_at")
-    .eq("project_id", projectId);
+    .from("project_files").select("path,sha,updated_at").eq("project_id", projectId);
   const { data: logs } = await supabase
-    .from("logs")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+    .from("logs").select("*").eq("project_id", projectId)
+    .order("created_at", { ascending: false }).limit(50);
   const { data: sandboxRuns } = await supabase
-    .from("sandbox_runs")
-    .select("*")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(10);
+    .from("sandbox_runs").select("*").eq("project_id", projectId)
+    .order("created_at", { ascending: false }).limit(10);
   const { data: assets } = await supabase
     .from("project_assets")
     .select("id,type,filename,mime_type,external_url,generator,metadata,created_at")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(50);
+    .eq("project_id", projectId).order("created_at", { ascending: false }).limit(50);
+  const { data: deliverables } = await supabase
+    .from("deliverables")
+    .select("id,kind,filename,storage_path,external_url,size_bytes,mime_type,generator,metadata,created_at")
+    .eq("project_id", projectId).order("created_at", { ascending: false }).limit(50);
   const { data: aiUsage } = await supabase
     .from("ai_usage")
     .select("role,model,input_tokens,output_tokens,estimated_cost_usd,created_at")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(100);
+    .eq("project_id", projectId).order("created_at", { ascending: false }).limit(100);
   const monthlySpend = await getMonthlyEstimatedSpend().catch(() => null);
 
   return {
@@ -133,6 +226,7 @@ export async function getProject(projectId) {
     logs: logs || [],
     sandboxRuns: sandboxRuns || [],
     assets: assets || [],
+    deliverables: deliverables || [],
     aiUsage: aiUsage || [],
     budget: { monthlySpend, config: getBudgetConfig() }
   };
@@ -141,7 +235,7 @@ export async function getProject(projectId) {
 export async function listProjects({ limit = 50 } = {}) {
   const { data, error } = await supabase
     .from("projects")
-    .select("id,name,goal,status,autonomy_mode,repo_url,vercel_url,estimated_spend_usd,created_at,updated_at")
+    .select("id,name,goal,kind,status,autonomy_mode,repo_url,vercel_url,estimated_spend_usd,awaiting_clarification,created_at,updated_at")
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -149,10 +243,7 @@ export async function listProjects({ limit = 50 } = {}) {
 }
 
 async function getFiles(projectId) {
-  const { data } = await supabase
-    .from("project_files")
-    .select("*")
-    .eq("project_id", projectId);
+  const { data } = await supabase.from("project_files").select("*").eq("project_id", projectId);
   return data || [];
 }
 
@@ -161,75 +252,79 @@ async function upsertFiles(projectId, files) {
     if (!file.path || typeof file.content !== "string") continue;
     if (file.path.includes("..") || file.path.startsWith("/")) continue;
     await supabase.from("project_files").upsert(
-      {
-        project_id: projectId,
-        path: file.path,
-        content: file.content,
-        updated_at: new Date().toISOString()
-      },
+      { project_id: projectId, path: file.path, content: file.content, updated_at: new Date().toISOString() },
       { onConflict: "project_id,path" }
     );
   }
 }
 
+async function uploadDeliverables(projectId, taskId, deliverables) {
+  const saved = [];
+  for (const d of deliverables || []) {
+    if (!d.filename || d.data == null || !d.kind) continue;
+    try {
+      const r = await saveDeliverable({
+        projectId,
+        taskId,
+        kind: d.kind,
+        filename: d.filename,
+        data: d.data,
+        mimeType: d.mimeType,
+        generator: d.generator,
+        metadata: d.metadata || {}
+      });
+      saved.push(r);
+    } catch (err) {
+      await logEvent({
+        projectId,
+        taskId,
+        level: "warn",
+        message: `Deliverable upload failed: ${d.filename}`,
+        data: { error: err.message }
+      });
+    }
+  }
+  return saved;
+}
+
 async function verify({ project, task, result }) {
   for (const command of result.commandsToRun || []) {
-    await runSandboxCommand({
-      projectId: project.id,
-      taskId: task.id,
-      command
-    });
+    await runSandboxCommand({ projectId: project.id, taskId: task.id, command });
   }
-  if (result.needsSmokeTest !== false) {
+  if (result.needsSmokeTest === true) {
     await runSmokeForProject({ projectId: project.id, taskId: task.id });
   }
 }
 
 export async function runSpecificTask(projectId, task) {
   const { data: project, error: projectError } = await supabase
-    .from("projects")
-    .select("*")
-    .eq("id", projectId)
-    .single();
+    .from("projects").select("*").eq("id", projectId).single();
   if (projectError) throw projectError;
 
   await assertBudgetAvailable({ projectId });
 
+  const pipeline = getPipeline(project.kind || "freeform");
   const routing = describeRouting(task);
+
   await logEvent({
-    projectId,
-    taskId: task.id,
+    projectId, taskId: task.id,
     message: `Running task: ${task.title}`,
-    data: { routing }
+    data: { routing, kind: project.kind }
   });
 
   try {
-    const agentName = getAgentForTaskType(task.type);
-    let result;
-    switch (agentName) {
-      case "designer":
-        result = await executeDesignTask({ project, task });
-        break;
-      case "videographer":
-        result = await executeVideoTask({ project, task });
-        break;
-      case "specialist":
-        result = await executeSpecialistTask({ project, task });
-        break;
-      case "librarian":
-        result = await executeLibrarianTask({ project, task });
-        break;
-      case "developer":
-      default:
-        result = await executeDevelopmentTask({
-          project,
-          task,
-          existingFiles: await getFiles(projectId)
-        });
-        break;
-    }
+    let result = await pipeline.executeTask({
+      project,
+      task,
+      existingFiles: await getFiles(projectId)
+    });
     result.routing = routing;
+
     await upsertFiles(projectId, result.files || []);
+    const savedDeliverables = await uploadDeliverables(projectId, task.id, result.deliverables || []);
+    if (savedDeliverables.length) {
+      result.savedDeliverables = savedDeliverables.map(d => ({ id: d.id, signedUrl: d.signedUrl, sizeBytes: d.sizeBytes }));
+    }
 
     let verified = false;
     let lastError = null;
@@ -245,101 +340,82 @@ export async function runSpecificTask(projectId, task) {
         if (loop >= maxDebug) break;
 
         await logEvent({
-          projectId,
-          taskId: task.id,
+          projectId, taskId: task.id,
           level: "error",
           message: "Verification failed. Running debugger.",
           data: { loop: loop + 1, error: error.message }
         });
 
         const fix = await debugFailure({
-          project,
-          task,
+          project, task,
           error: error.message,
           files: await getFiles(projectId),
           loopNumber: loop + 1
         });
         await upsertFiles(projectId, fix.files || []);
 
-        // Run any debugger-suggested commands first; default to install + build.
         const fallbackCommands = ["npm install", "npm run build"];
         const cmds = fix.commandsToRun?.length ? fix.commandsToRun : fallbackCommands;
         for (const command of cmds) {
           try {
             await runSandboxCommand({ projectId, taskId: task.id, command });
           } catch (cmdErr) {
-            // Allow the verify loop below to surface failures.
             await logEvent({
-              projectId,
-              taskId: task.id,
+              projectId, taskId: task.id,
               level: "warn",
               message: `Debug command failed: ${command}`,
               data: { error: cmdErr.message }
             });
           }
         }
-
         result.debugFix = fix;
       }
     }
 
     if (!verified) throw lastError || new Error("Verification failed.");
 
-    const review = await reviewProject({
-      project,
-      task,
-      files: await getFiles(projectId)
-    });
-    result.review = review;
+    // Code-pipeline projects get reviewed + GitHub-pushed.
+    const isCodePipeline = ["web_app", "static_site", "backend_api", "mobile_app", "script", "automation"].includes(project.kind);
+    if (isCodePipeline) {
+      const review = await reviewProject({
+        project, task,
+        files: await getFiles(projectId)
+      });
+      result.review = review;
 
-    const repo = await createRepoIfNeeded(project);
-    await upsertFilesToGitHub({ projectId, repoName: repo.repoName });
+      const repo = await createRepoIfNeeded(project);
+      await upsertFilesToGitHub({ projectId, repoName: repo.repoName });
+      await supabase.from("projects").update({
+        repo_name: repo.repoName, repo_url: repo.repoUrl,
+        status: "building", last_worker_heartbeat: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }).eq("id", projectId);
+    }
 
-    await supabase
-      .from("tasks")
-      .update({
-        status: "complete",
-        result,
-        assigned_worker_id: null,
-        locked_until: null,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", task.id);
-    await supabase
-      .from("projects")
-      .update({
-        repo_name: repo.repoName,
-        repo_url: repo.repoUrl,
-        status: "building",
-        last_worker_heartbeat: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", projectId);
+    await supabase.from("tasks").update({
+      status: "complete", result,
+      assigned_worker_id: null, locked_until: null,
+      updated_at: new Date().toISOString()
+    }).eq("id", task.id);
+
     await logEvent({
-      projectId,
-      taskId: task.id,
-      message: "Task complete and verified.",
-      data: { summary: result.summary, filesWritten: (result.files || []).length }
+      projectId, taskId: task.id,
+      message: "Task complete.",
+      data: { summary: result.summary, filesWritten: (result.files || []).length, deliverables: (result.deliverables || []).length }
     });
 
-    return { task, result, repo };
+    return { task, result };
   } catch (error) {
     const maxRetries = Number(process.env.MAX_TASK_RETRIES || 3);
     const nextStatus = task.attempts >= maxRetries ? "failed" : "pending";
 
-    await supabase
-      .from("tasks")
-      .update({
-        status: nextStatus,
-        error: error.message,
-        assigned_worker_id: null,
-        locked_until: null,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", task.id);
+    await supabase.from("tasks").update({
+      status: nextStatus, error: error.message,
+      assigned_worker_id: null, locked_until: null,
+      updated_at: new Date().toISOString()
+    }).eq("id", task.id);
     await logEvent({
-      projectId,
-      taskId: task.id,
+      projectId, taskId: task.id,
       level: "error",
       message: "Task failed.",
       data: { error: error.message, nextStatus }
@@ -349,33 +425,27 @@ export async function runSpecificTask(projectId, task) {
 }
 
 export async function runNextTask(projectId) {
-  const { data: task, error } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("project_id", projectId)
-    .eq("status", "pending")
-    .order("priority", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const { data: project } = await supabase.from("projects").select("awaiting_clarification").eq("id", projectId).single();
+  if (project?.awaiting_clarification) {
+    return { done: false, message: "Project is awaiting clarification answers." };
+  }
 
+  const { data: task, error } = await supabase
+    .from("tasks").select("*").eq("project_id", projectId)
+    .eq("status", "pending").order("priority", { ascending: true })
+    .limit(1).maybeSingle();
   if (error) throw error;
+
   if (!task) {
-    await supabase
-      .from("projects")
-      .update({
-        status: "complete",
-        current_stage: "complete",
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", projectId);
+    await supabase.from("projects").update({
+      status: "complete", current_stage: "complete",
+      updated_at: new Date().toISOString()
+    }).eq("id", projectId);
     await logEvent({ projectId, message: "Project complete." });
     return { done: true, message: "No pending tasks." };
   }
 
-  await supabase
-    .from("tasks")
-    .update({ status: "running", attempts: task.attempts + 1 })
-    .eq("id", task.id);
+  await supabase.from("tasks").update({ status: "running", attempts: task.attempts + 1 }).eq("id", task.id);
   return runSpecificTask(projectId, { ...task, attempts: task.attempts + 1 });
 }
 

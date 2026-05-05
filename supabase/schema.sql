@@ -103,6 +103,31 @@ create table if not exists budget_events (
   created_at timestamptz not null default now()
 );
 
+-- Universal builder additions
+alter table projects add column if not exists kind text default 'web_app';
+alter table projects add column if not exists clarifications jsonb default '[]'::jsonb;
+alter table projects add column if not exists awaiting_clarification boolean default false;
+
+-- Deliverables table: any artifact produced that isn't code in the repo.
+create table if not exists deliverables (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  task_id uuid references tasks(id) on delete set null,
+  kind text not null,                  -- pdf | pptx | xlsx | docx | video | image | zip | audio | report | other
+  filename text not null,
+  storage_path text,
+  external_url text,
+  size_bytes bigint,
+  mime_type text,
+  generator text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_deliverables_project on deliverables(project_id, created_at desc);
+
+-- Storage bucket (created via this migration too):
+--   storage.buckets row 'deliverables' (private, 500MB limit)
+
 -- Generated assets (images from Nano Banana, videos from Higgsfield)
 create table if not exists project_assets (
   id uuid primary key default uuid_generate_v4(),

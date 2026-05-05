@@ -84,9 +84,18 @@
             </div>
           </header>
 
+          <div id="clarification-banner" class="clarification hidden">
+            <div class="clarification-head">
+              <strong>A few quick questions before I start</strong>
+            </div>
+            <div id="clarification-questions"></div>
+            <button class="btn primary" id="submit-clarifications">Continue</button>
+          </div>
+
           <nav class="tabs">
             <button class="tab active" data-tab="tasks">Tasks</button>
             <button class="tab" data-tab="files">Files</button>
+            <button class="tab" data-tab="deliverables">Deliverables</button>
             <button class="tab" data-tab="assets">Assets</button>
             <button class="tab" data-tab="logs">Logs</button>
             <button class="tab" data-tab="sandbox">Sandbox</button>
@@ -112,6 +121,10 @@
 
           <div class="tab-panel hidden" data-panel="files">
             <ul class="file-list" id="files-list"></ul>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="deliverables">
+            <ul class="deliverable-list" id="deliverables-list"></ul>
           </div>
 
           <div class="tab-panel hidden" data-panel="assets">

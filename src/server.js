@@ -9,8 +9,11 @@ import {
   getProject,
   listProjects,
   runNextTask,
-  runAutonomousProject
+  runAutonomousProject,
+  submitClarifications
 } from "./services/orchestrator.js";
+import { getDeliverableUrl } from "./lib/storage.js";
+import { listKinds } from "./pipelines/index.js";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
 import { deployProjectToVercel } from "./services/vercel.js";
 
@@ -68,13 +71,55 @@ app.get("/api/projects", async (_req, res) => {
   }
 });
 
+app.get("/api/kinds", (_req, res) => {
+  res.json({ ok: true, kinds: listKinds() });
+});
+
+app.post("/api/projects/:projectId/clarifications", async (req, res) => {
+  try {
+    const body = z.object({ answers: z.array(z.string()) }).parse(req.body);
+    const result = await submitClarifications({
+      projectId: req.params.projectId,
+      answers: body.answers
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error?.message });
+  }
+});
+
+app.get("/api/deliverables/:id/url", async (req, res) => {
+  try {
+    const url = await getDeliverableUrl(req.params.id);
+    if (!url) return res.status(404).json({ ok: false, error: "Not found." });
+    res.json({ ok: true, url });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.get("/api/deliverables/:id/download", async (req, res) => {
+  try {
+    const url = await getDeliverableUrl(req.params.id);
+    if (!url) return res.status(404).json({ ok: false, error: "Not found." });
+    res.redirect(url);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
 app.post("/api/projects", async (req, res) => {
   try {
     const body = z
       .object({
         goal: z.string().min(10),
         name: z.string().optional(),
-        autonomyMode: z.enum(["safe", "dev", "autonomous"]).optional()
+        autonomyMode: z.enum(["safe", "dev", "autonomous"]).optional(),
+        attachedDocs: z.array(z.object({
+          filename: z.string().optional(),
+          url: z.string().optional(),
+          content: z.string().optional()
+        })).optional()
       })
       .parse(req.body);
 
