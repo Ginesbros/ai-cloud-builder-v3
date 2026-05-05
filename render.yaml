@@ -3,12 +3,16 @@ services:
     name: ai-cloud-builder-api
     env: node
     plan: starter
-    buildCommand: npm install && npx playwright install --with-deps chromium
+    buildCommand: npm install && npx playwright install chromium
     startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
 
-  - type: worker
+  - type: web
     name: ai-cloud-builder-worker
     env: node
     plan: starter
-    buildCommand: npm install && npx playwright install --with-deps chromium
+    buildCommand: npm install && npx playwright install chromium
     startCommand: npm run worker
+    healthCheckPath: /
+    autoDeploy: true

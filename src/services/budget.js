@@ -16,13 +16,10 @@ export function getBudgetConfig() {
 }
 
 export function estimateCost({ role, inputTokens = 0, outputTokens = 0 }) {
-  const prefix = role.toUpperCase();
-
+  const prefix = (role || "").toUpperCase();
   const inRate = Number(process.env[`COST_${prefix}_INPUT_PER_1M`] || 0);
   const outRate = Number(process.env[`COST_${prefix}_OUTPUT_PER_1M`] || 0);
-
-  return (inputTokens / 1_000_000) * inRate +
-    (outputTokens / 1_000_000) * outRate;
+  return (inputTokens / 1_000_000) * inRate + (outputTokens / 1_000_000) * outRate;
 }
 
 export async function recordAiUsage({
@@ -53,7 +50,6 @@ export async function recordAiUsage({
       .single();
 
     const next = Number(data?.estimated_spend_usd || 0) + estimatedCost;
-
     await supabase
       .from("projects")
       .update({
@@ -75,7 +71,6 @@ export async function getMonthlyEstimatedSpend() {
     .from("ai_usage")
     .select("estimated_cost_usd")
     .gte("created_at", start.toISOString());
-
   if (error) throw error;
 
   return (data || []).reduce(
@@ -93,12 +88,15 @@ export async function assertBudgetAvailable({ projectId }) {
       projectId,
       level: "error",
       message: "Hard monthly budget limit reached.",
-      data: {
-        spend,
-        budget: cfg.monthlyBudget
-      }
+      data: { spend, budget: cfg.monthlyBudget }
     });
-
+    await supabase.from("budget_events").insert({
+      project_id: projectId,
+      level: "hard",
+      message: "Hard monthly budget limit reached.",
+      estimated_monthly_spend_usd: spend,
+      budget_usd: cfg.monthlyBudget
+    });
     throw new Error(
       `Hard budget limit reached: estimated $${spend.toFixed(2)} / $${cfg.monthlyBudget}`
     );
@@ -109,15 +107,16 @@ export async function assertBudgetAvailable({ projectId }) {
       projectId,
       level: "warn",
       message: "Soft monthly budget warning.",
-      data: {
-        spend,
-        budget: cfg.monthlyBudget
-      }
+      data: { spend, budget: cfg.monthlyBudget }
+    });
+    await supabase.from("budget_events").insert({
+      project_id: projectId,
+      level: "soft",
+      message: "Soft monthly budget warning.",
+      estimated_monthly_spend_usd: spend,
+      budget_usd: cfg.monthlyBudget
     });
   }
 
-  return {
-    spend,
-    ...cfg
-  };
+  return { spend, ...cfg };
 }

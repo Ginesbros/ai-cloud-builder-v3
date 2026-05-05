@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Cloud Builder v3</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo-mark"></div>
+        <div>
+          <div class="brand-name">AI Cloud Builder</div>
+          <div class="brand-sub">v3 · multi-agent orchestrator</div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="budget-pill" id="budget-pill">Budget: —</div>
+        <button class="btn ghost" id="refresh-btn" title="Refresh">↻ Refresh</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- LEFT: project list + create -->
+      <aside class="sidebar">
+        <section class="card">
+          <h2>New project</h2>
+          <form id="create-form">
+            <label>Goal</label>
+            <textarea
+              id="goal"
+              rows="4"
+              placeholder="Describe what you want built (min 10 chars). E.g. Build a Vite + React landing page for an HVAC business with a quote form."
+              required
+            ></textarea>
+            <label>Name (optional)</label>
+            <input id="name" type="text" placeholder="kebab-case-name" />
+            <label>Autonomy</label>
+            <select id="autonomy">
+              <option value="dev" selected>dev (recommended)</option>
+              <option value="safe">safe</option>
+              <option value="autonomous">autonomous</option>
+            </select>
+            <button class="btn primary" type="submit">Create + Plan</button>
+            <div class="help-text">
+              The planner will research the goal and generate executable tasks.
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="row-between">
+            <h2>Projects</h2>
+            <button class="btn tiny ghost" id="reload-projects">refresh</button>
+          </div>
+          <ul class="project-list" id="project-list">
+            <li class="muted">Loading…</li>
+          </ul>
+        </section>
+      </aside>
+
+      <!-- RIGHT: project detail -->
+      <section class="content">
+        <div id="empty-state" class="empty">
+          <h1>Welcome back</h1>
+          <p>
+            Create a project on the left or pick one from the list to see plan
+            tasks, files, logs, sandbox runs, and live spending.
+          </p>
+        </div>
+
+        <div id="detail" class="detail hidden">
+          <header class="detail-head">
+            <div>
+              <h1 id="d-name">—</h1>
+              <p id="d-goal" class="muted"></p>
+              <div id="d-meta" class="chips"></div>
+            </div>
+            <div class="detail-actions">
+              <button class="btn primary" id="btn-run-next">Run next task</button>
+              <button class="btn" id="btn-run-auto">Run autonomous</button>
+              <button class="btn ghost" id="btn-deploy">Deploy to Vercel</button>
+            </div>
+          </header>
+
+          <nav class="tabs">
+            <button class="tab active" data-tab="tasks">Tasks</button>
+            <button class="tab" data-tab="files">Files</button>
+            <button class="tab" data-tab="logs">Logs</button>
+            <button class="tab" data-tab="sandbox">Sandbox</button>
+            <button class="tab" data-tab="spend">Spending</button>
+          </nav>
+
+          <div class="tab-panel" data-panel="tasks">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Attempts</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody id="tasks-body"></tbody>
+            </table>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="files">
+            <ul class="file-list" id="files-list"></ul>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="logs">
+            <div class="log-stream" id="logs-stream"></div>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="sandbox">
+            <div class="sandbox-runs" id="sandbox-runs"></div>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="spend">
+            <div class="spend-grid" id="spend-grid"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

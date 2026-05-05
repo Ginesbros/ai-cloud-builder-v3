@@ -7,11 +7,21 @@ export async function logEvent({
   message,
   data = null
 }) {
-  await supabase.from("logs").insert({
-    project_id: projectId,
-    task_id: taskId,
-    level,
-    message,
-    data
-  });
+  try {
+    await supabase.from("logs").insert({
+      project_id: projectId,
+      task_id: taskId,
+      level,
+      message,
+      data
+    });
+  } catch (err) {
+    // Never let logging break execution.
+    console.error("logEvent failed:", err?.message || err);
+  }
+
+  // Mirror to stdout for Render log streams.
+  const stamp = new Date().toISOString();
+  const tag = `[${level.toUpperCase()}]`;
+  console.log(`${stamp} ${tag} project=${projectId} task=${taskId || "-"} ${message}`);
 }

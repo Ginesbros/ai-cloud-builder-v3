@@ -1,10 +1,9 @@
-
 import axios from "axios";
 import { supabase } from "../lib/supabase.js";
 
 function githubClient() {
   if (!process.env.GITHUB_TOKEN || !process.env.GITHUB_OWNER) {
-    throw new Error("Missing GitHub env vars.");
+    throw new Error("Missing GitHub env vars (GITHUB_TOKEN, GITHUB_OWNER).");
   }
 
   return axios.create({
@@ -13,7 +12,8 @@ function githubClient() {
       Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28"
-    }
+    },
+    timeout: 30000
   });
 }
 
@@ -34,16 +34,17 @@ export async function createRepoIfNeeded(project) {
       name: repoName,
       private: true,
       auto_init: true,
-      description: `AI-generated: ${project.goal.slice(0, 120)}`
+      description: `AI-generated: ${(project.goal || "").slice(0, 120)}`
     });
-
     return { repoName, repoUrl: created.data.html_url };
   }
 }
 
 async function getExistingSha({ gh, owner, repoName, path }) {
   try {
-    const existing = await gh.get(`/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}`);
+    const existing = await gh.get(
+      `/repos/${owner}/${repoName}/contents/${encodeURIComponent(path)}`
+    );
     return existing.data.sha;
   } catch {
     return null;
@@ -58,37 +59,26 @@ export async function upsertFilesToGitHub({ projectId, repoName }) {
     .from("project_files")
     .select("*")
     .eq("project_id", projectId);
-
   if (error) throw error;
 
   const pushed = [];
-
   for (const file of files || []) {
-    const sha = await getExistingSha({
-      gh,
-      owner,
-      repoName,
-      path: file.path
-    });
-
+    const sha = await getExistingSha({ gh, owner, repoName, path: file.path });
     const payload = {
       message: `AI update ${file.path}`,
       content: Buffer.from(file.content, "utf8").toString("base64"),
       branch: "main"
     };
-
     if (sha) payload.sha = sha;
 
     const response = await gh.put(
       `/repos/${owner}/${repoName}/contents/${encodeURIComponent(file.path)}`,
       payload
     );
-
-    await supabase.from("project_files").update({
-      sha: response.data.content.sha,
-      updated_at: new Date().toISOString()
-    }).eq("id", file.id);
-
+    await supabase
+      .from("project_files")
+      .update({ sha: response.data.content.sha, updated_at: new Date().toISOString() })
+      .eq("id", file.id);
     pushed.push(file.path);
   }
 

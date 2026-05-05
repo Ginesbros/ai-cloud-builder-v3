@@ -6,15 +6,33 @@ if (!process.env.OPENAI_API_KEY) {
   throw new Error("Missing OPENAI_API_KEY");
 }
 
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 function getUsage(response) {
   return {
-    inputTokens: response.usage?.input_tokens || response.usage?.prompt_tokens || 0,
-    outputTokens: response.usage?.output_tokens || response.usage?.completion_tokens || 0
+    inputTokens:
+      response.usage?.input_tokens ||
+      response.usage?.prompt_tokens ||
+      0,
+    outputTokens:
+      response.usage?.output_tokens ||
+      response.usage?.completion_tokens ||
+      0
   };
+}
+
+/**
+ * Extract plain text from a Responses API result, handling various shapes.
+ */
+function extractText(response) {
+  if (typeof response.output_text === "string" && response.output_text.length > 0) {
+    return response.output_text;
+  }
+  const parts = response.output?.flatMap(item => item.content || []) || [];
+  return parts
+    .map(p => (typeof p === "string" ? p : p?.text || ""))
+    .filter(Boolean)
+    .join("");
 }
 
 export async function askOpenAI({
@@ -30,26 +48,13 @@ export async function askOpenAI({
   const response = await openai.responses.create({
     model,
     input: [
-      {
-        role: "system",
-        content: system
-      },
-      {
-        role: "user",
-        content: user
-      }
+      { role: "system", content: system },
+      { role: "user", content: user }
     ],
-    text: json
-      ? {
-          format: {
-            type: "json_object"
-          }
-        }
-      : undefined
+    text: json ? { format: { type: "json_object" } } : undefined
   });
 
   const usage = getUsage(response);
-
   await recordAiUsage({
     projectId,
     taskId,
@@ -58,5 +63,5 @@ export async function askOpenAI({
     ...usage
   }).catch(() => null);
 
-  return response.output_text;
+  return extractText(response);
 }

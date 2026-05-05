@@ -81,3 +81,33 @@ create table if not exists sandbox_runs (
   duration_ms int,
   created_at timestamptz not null default now()
 );
+
+create table if not exists approvals (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  task_id uuid references tasks(id) on delete set null,
+  action_type text not null,
+  payload jsonb not null default '{}'::jsonb,
+  status text not null default 'pending',
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+create table if not exists budget_events (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  level text not null,
+  message text not null,
+  estimated_monthly_spend_usd numeric,
+  budget_usd numeric,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_tasks_project_status on tasks(project_id, status, priority);
+create index if not exists idx_tasks_worker_lock on tasks(assigned_worker_id, locked_until);
+create index if not exists idx_tasks_status_lock on tasks(status, locked_until);
+create index if not exists idx_logs_project_created on logs(project_id, created_at desc);
+create index if not exists idx_ai_usage_created on ai_usage(created_at desc);
+
+-- Useful reset query during testing:
+-- update tasks set status = 'pending', assigned_worker_id = null, locked_until = null, attempts = 0;
