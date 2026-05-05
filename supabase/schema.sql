@@ -103,6 +103,36 @@ create table if not exists budget_events (
   created_at timestamptz not null default now()
 );
 
+-- Generated assets (images from Nano Banana, videos from Higgsfield)
+create table if not exists project_assets (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  task_id uuid references tasks(id) on delete set null,
+  type text not null,                       -- image | video | other
+  filename text not null,
+  mime_type text,
+  content_base64 text,                      -- inline binary for images (small)
+  external_url text,                        -- for videos / large assets
+  generator text,                           -- nano_banana | higgsfield | ...
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+-- Manus long-running specialist jobs
+create table if not exists manus_jobs (
+  id uuid primary key default uuid_generate_v4(),
+  project_id uuid references projects(id) on delete cascade,
+  task_id uuid references tasks(id) on delete set null,
+  job_id text not null,
+  status text not null default 'queued',
+  payload jsonb not null default '{}'::jsonb,
+  output jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_assets_project on project_assets(project_id, created_at desc);
+create index if not exists idx_manus_jobs_status on manus_jobs(status, updated_at desc);
 create index if not exists idx_tasks_project_status on tasks(project_id, status, priority);
 create index if not exists idx_tasks_worker_lock on tasks(assigned_worker_id, locked_until);
 create index if not exists idx_tasks_status_lock on tasks(status, locked_until);

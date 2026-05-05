@@ -2,8 +2,13 @@ import { supabase } from "../lib/supabase.js";
 import { logEvent } from "../lib/logger.js";
 import { createPlan } from "../agents/planner.js";
 import { executeDevelopmentTask } from "../agents/developer.js";
+import { executeDesignTask } from "../agents/designer.js";
+import { executeSpecialistTask } from "../agents/specialist.js";
+import { executeVideoTask } from "../agents/videographer.js";
+import { executeLibrarianTask } from "../agents/librarian.js";
 import { debugFailure } from "../agents/debugger.js";
 import { reviewProject } from "../agents/reviewer.js";
+import { describeRouting, getAgentForTaskType } from "../agents/modelRouter.js";
 import { createRepoIfNeeded, upsertFilesToGitHub } from "./github.js";
 import { runSandboxCommand } from "../sandbox/sandboxManager.js";
 import { runSmokeForProject } from "../sandbox/smokeRunner.js";
@@ -107,6 +112,18 @@ export async function getProject(projectId) {
     .eq("project_id", projectId)
     .order("created_at", { ascending: false })
     .limit(10);
+  const { data: assets } = await supabase
+    .from("project_assets")
+    .select("id,type,filename,mime_type,external_url,generator,metadata,created_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  const { data: aiUsage } = await supabase
+    .from("ai_usage")
+    .select("role,model,input_tokens,output_tokens,estimated_cost_usd,created_at")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .limit(100);
   const monthlySpend = await getMonthlyEstimatedSpend().catch(() => null);
 
   return {
@@ -115,6 +132,8 @@ export async function getProject(projectId) {
     files: files || [],
     logs: logs || [],
     sandboxRuns: sandboxRuns || [],
+    assets: assets || [],
+    aiUsage: aiUsage || [],
     budget: { monthlySpend, config: getBudgetConfig() }
   };
 }
@@ -175,18 +194,41 @@ export async function runSpecificTask(projectId, task) {
   if (projectError) throw projectError;
 
   await assertBudgetAvailable({ projectId });
+
+  const routing = describeRouting(task);
   await logEvent({
     projectId,
     taskId: task.id,
-    message: `Running task: ${task.title}`
+    message: `Running task: ${task.title}`,
+    data: { routing }
   });
 
   try {
-    let result = await executeDevelopmentTask({
-      project,
-      task,
-      existingFiles: await getFiles(projectId)
-    });
+    const agentName = getAgentForTaskType(task.type);
+    let result;
+    switch (agentName) {
+      case "designer":
+        result = await executeDesignTask({ project, task });
+        break;
+      case "videographer":
+        result = await executeVideoTask({ project, task });
+        break;
+      case "specialist":
+        result = await executeSpecialistTask({ project, task });
+        break;
+      case "librarian":
+        result = await executeLibrarianTask({ project, task });
+        break;
+      case "developer":
+      default:
+        result = await executeDevelopmentTask({
+          project,
+          task,
+          existingFiles: await getFiles(projectId)
+        });
+        break;
+    }
+    result.routing = routing;
     await upsertFiles(projectId, result.files || []);
 
     let verified = false;

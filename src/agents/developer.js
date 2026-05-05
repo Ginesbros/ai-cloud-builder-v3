@@ -9,6 +9,7 @@ export async function executeDevelopmentTask({ project, task, existingFiles }) {
 
   const raw = await askOpenAI({
     role: "developer",
+    taskType: task.type || "development",
     projectId: project.id,
     taskId: task.id,
     json: true,

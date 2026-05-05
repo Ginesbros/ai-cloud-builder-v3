@@ -21,9 +21,6 @@ function getUsage(response) {
   };
 }
 
-/**
- * Extract plain text from a Responses API result, handling various shapes.
- */
 function extractText(response) {
   if (typeof response.output_text === "string" && response.output_text.length > 0) {
     return response.output_text;
@@ -37,13 +34,15 @@ function extractText(response) {
 
 export async function askOpenAI({
   role = "developer",
+  taskType = null,
   system,
   user,
   json = false,
   projectId = null,
-  taskId = null
+  taskId = null,
+  modelOverride = null
 }) {
-  const model = getModelForRole(role);
+  const model = modelOverride || getModelForRole(role, taskType);
 
   const response = await openai.responses.create({
     model,

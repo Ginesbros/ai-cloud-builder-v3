@@ -128,6 +128,25 @@ app.post("/api/projects/:projectId/run-autonomous", async (req, res) => {
   }
 });
 
+app.get("/api/assets/:assetId", async (req, res) => {
+  try {
+    const { supabase } = await import("./lib/supabase.js");
+    const { data, error } = await supabase
+      .from("project_assets")
+      .select("mime_type,content_base64,external_url")
+      .eq("id", req.params.assetId)
+      .maybeSingle();
+    if (error || !data) return res.status(404).json({ ok: false, error: "Not found." });
+    if (data.external_url) return res.redirect(data.external_url);
+    if (!data.content_base64) return res.status(404).json({ ok: false, error: "No content." });
+    res.setHeader("Content-Type", data.mime_type || "application/octet-stream");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(Buffer.from(data.content_base64, "base64"));
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
 app.post("/api/projects/:projectId/deploy", async (req, res) => {
   try {
     const result = await deployProjectToVercel(req.params.projectId);

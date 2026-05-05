@@ -144,8 +144,11 @@ function renderDetail() {
 
   // Tasks
   $("#tasks-body").innerHTML = (d.tasks || [])
-    .map(
-      t => `
+    .map(t => {
+      const routing = (t.result && t.result.routing) || routingForType(t.type);
+      const agent = routing.agent || "developer";
+      const model = routing.model || "—";
+      return `
       <tr>
         <td>${t.priority}</td>
         <td>
@@ -154,11 +157,15 @@ function renderDetail() {
           ${t.error ? `<div class="muted" style="color:var(--error)">${escapeHtml(t.error)}</div>` : ""}
         </td>
         <td>${escapeHtml(t.type)}</td>
+        <td>
+          <span class="agent-badge ${agent}">${agent}</span>
+          <span class="agent-model">${escapeHtml(model)}</span>
+        </td>
         <td><span class="status-badge status-${t.status}">${t.status}</span></td>
         <td>${t.attempts}</td>
         <td>${fmtRel(t.updated_at)}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join("");
 
   // Files
@@ -172,6 +179,22 @@ function renderDetail() {
       </li>`
     )
     .join("") || `<li class="muted">No files yet.</li>`;
+
+  // Assets
+  $("#assets-grid").innerHTML = (d.assets || []).map(a => {
+    const isImage = a.type === "image";
+    const thumb = isImage
+      ? `<img class="asset-thumb" src="/api/assets/${a.id}" alt="${escapeHtml(a.filename)}" />`
+      : `<div class="video-pill">▶  ${escapeHtml(a.type.toUpperCase())}</div>`;
+    return `
+      <div class="asset-card">
+        ${thumb}
+        <div class="asset-meta">
+          <div class="asset-name">${escapeHtml(a.filename)}</div>
+          <div>${escapeHtml(a.generator || "—")} · ${fmtRel(a.created_at)}</div>
+        </div>
+      </div>`;
+  }).join("") || `<div class="muted">No assets generated yet.</div>`;
 
   // Logs
   $("#logs-stream").innerHTML = (d.logs || [])
@@ -221,6 +244,18 @@ function renderDetail() {
       <div class="value" style="font-size:14px">$${(cfg.softLimit || 0).toFixed(0)} / $${(cfg.hardLimit || 0).toFixed(0)}</div>
     </div>
   `;
+}
+
+// Best-effort routing fallback when a task hasn't run yet (no .result.routing).
+function routingForType(type) {
+  const t = (type || "development").toLowerCase();
+  if (t === "design" || t === "assets" || t === "image") return { agent: "designer", model: "nano-banana" };
+  if (t === "video") return { agent: "videographer", model: "higgsfield" };
+  if (t === "specialist" || t === "long_running") return { agent: "specialist", model: "manus" };
+  if (t === "docs") return { agent: "librarian", model: "notebooklm" };
+  if (t === "backend" || t === "database" || t === "integration") return { agent: "developer", model: "gpt-4.1" };
+  if (t === "review") return { agent: "reviewer", model: "claude+gemini+grok" };
+  return { agent: "developer", model: "gpt-4.1-mini" };
 }
 
 function statusChipClass(status) {

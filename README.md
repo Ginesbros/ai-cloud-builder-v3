@@ -1,6 +1,22 @@
 # AI Cloud Builder v3
 
-Autonomous multi-agent system that plans, builds, debugs, and ships software using OpenAI / Claude / Gemini / Grok / Perplexity, Supabase, GitHub, and a Playwright sandbox. Includes a built-in dashboard UI.
+Autonomous multi-agent system that plans, builds, debugs, and ships software using a panel of AIs — each one assigned to its strength. Backed by Supabase, GitHub, and a Playwright sandbox. Includes a built-in dashboard UI.
+
+## Who does what
+
+| Role | AI | What it does |
+|---|---|---|
+| Planner | **Claude Opus 4.5** | Reads the goal, breaks it into a typed task list |
+| Researcher | **Perplexity Sonar Pro** | Live web search, citation-backed package picks |
+| Librarian | **NotebookLM / Gemini 2.5 Pro** | Digests attached PDFs / docs |
+| Developer | **GPT-4.1-mini** (frontend/setup/test/deploy) **GPT-4.1** (backend/database/integration) | Writes code |
+| Debugger | **GPT-4.1** | Fixes failed builds in retry loops |
+| Reviewer panel | **Claude Sonnet 4.5 + Gemini 2.5 Pro + Grok 4** | Three independent code reviews after every task |
+| Designer | **Nano Banana** (Gemini 3.1 Flash Image) | Generates logos / hero images / OG images |
+| Specialist | **Manus** | Hands off multi-hour autonomous work |
+| Videographer | **Higgsfield** | Renders demo / marketing videos |
+
+Full routing rules in [docs/ROLE_MATRIX.md](docs/ROLE_MATRIX.md).
 
 ## What's in this repo
 
@@ -106,6 +122,24 @@ POST /api/projects/:projectId/deploy
 GET  /debug/env-safe          (requires x-admin-token)
 GET  /debug/supabase-test     (requires x-admin-token)
 ```
+
+## Multi-AI orchestration
+
+Every task in a plan has a `type` field. The orchestrator's `modelRouter`
+dispatches by task type at execution time:
+
+```
+task.type = setup | frontend | test | deploy            → developer (gpt-4.1-mini)
+task.type = backend | database | integration            → developer (gpt-4.1)
+task.type = design | assets | image                     → designer (Nano Banana)
+task.type = video                                       → videographer (Higgsfield)
+task.type = specialist | long_running                   → specialist (Manus)
+task.type = docs                                        → librarian (NotebookLM)
+task.type = review                                      → reviewer panel (Claude+Gemini+Grok)
+```
+
+All provider/model assignments are overridable via env (see `.env.example`).
+Every optional provider degrades gracefully when its API key is missing.
 
 ## Improvements over v3 base
 

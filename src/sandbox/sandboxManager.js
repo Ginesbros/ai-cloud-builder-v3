@@ -29,7 +29,17 @@ export async function prepareSandbox(projectId) {
   for (const file of data || []) {
     const fp = path.join(dir, safe(file.path));
     await fs.mkdir(path.dirname(fp), { recursive: true });
-    await fs.writeFile(fp, file.content, "utf8");
+
+    // Designer produces binary assets serialized as:
+    //   __BINARY_BASE64__<mime>\n<base64-payload>
+    // Decode those back to real bytes so smoke tests / vite serve them correctly.
+    if (typeof file.content === "string" && file.content.startsWith("__BINARY_BASE64__")) {
+      const newlineIdx = file.content.indexOf("\n");
+      const payload = newlineIdx >= 0 ? file.content.slice(newlineIdx + 1) : "";
+      await fs.writeFile(fp, Buffer.from(payload, "base64"));
+    } else {
+      await fs.writeFile(fp, file.content, "utf8");
+    }
   }
   return dir;
 }

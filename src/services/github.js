@@ -64,9 +64,19 @@ export async function upsertFilesToGitHub({ projectId, repoName }) {
   const pushed = [];
   for (const file of files || []) {
     const sha = await getExistingSha({ gh, owner, repoName, path: file.path });
+
+    // Decode designer's __BINARY_BASE64__ marker → raw base64 for GitHub.
+    let contentBase64;
+    if (typeof file.content === "string" && file.content.startsWith("__BINARY_BASE64__")) {
+      const newlineIdx = file.content.indexOf("\n");
+      contentBase64 = newlineIdx >= 0 ? file.content.slice(newlineIdx + 1) : "";
+    } else {
+      contentBase64 = Buffer.from(file.content, "utf8").toString("base64");
+    }
+
     const payload = {
       message: `AI update ${file.path}`,
-      content: Buffer.from(file.content, "utf8").toString("base64"),
+      content: contentBase64,
       branch: "main"
     };
     if (sha) payload.sha = sha;
