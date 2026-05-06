@@ -1,134 +1,170 @@
 /**
  * Model router — central dispatch table.
  *
- * Two related decisions live here:
- *   1. getProviderForRole(role)  → which provider/client to call (openai|anthropic|...)
- *   2. getModelForRole(role, taskType?) → which model id to pass to that provider
+ * Design principle (after the snake-game silent-success bug):
+ *   Each provider has its OWN model map. Cross-provider mixing is impossible.
+ *   When a client (claudeClient, openaiClient, etc.) asks for a model, it
+ *   only ever gets a model ID belonging to its own provider.
  *
- * Everything is overridable via env so you can tune without touching code.
- * See docs/ROLE_MATRIX.md for the full design.
+ * Env vars are still respected, but they're validated against the provider
+ * — an env var trying to set a Claude model on the OpenAI side is ignored
+ * with a warning.
  */
 
-// --- Provider routing per high-level role ---
+// === Per-provider model maps ===
+// Each map's keys are roles. Values are model IDs valid for that provider.
+
+const ANTHROPIC_MODELS = {
+  // Verified live on Anthropic's /v1/models endpoint as of May 2026.
+  planner: process.env.PLANNER_MODEL_ANTHROPIC || "claude-opus-4-7",
+  reviewer: process.env.REVIEWER_MODEL_ANTHROPIC || "claude-sonnet-4-6",
+  haiku: process.env.HAIKU_MODEL_ANTHROPIC || "claude-haiku-4-5"
+};
+
+const OPENAI_MODELS = {
+  // Default to mini everywhere so a single task can't blow past free-tier TPM.
+  // Debugger escalates to full gpt-4.1 only on retry.
+  planner: process.env.PLANNER_MODEL_OPENAI || "gpt-4.1",         // OpenAI fallback if Claude unavailable
+  developer_default: process.env.DEV_DEFAULT_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_setup: process.env.DEV_SETUP_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_frontend: process.env.DEV_FRONTEND_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_backend: process.env.DEV_BACKEND_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_database: process.env.DEV_DATABASE_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_integration: process.env.DEV_INTEGRATION_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_test: process.env.DEV_TEST_MODEL_OPENAI || "gpt-4.1-mini",
+  developer_deploy: process.env.DEV_DEPLOY_MODEL_OPENAI || "gpt-4.1-mini",
+  debugger: process.env.OPENAI_DEBUGGER_MODEL_VALIDATED || "gpt-4.1-mini",
+  classifier: "gpt-4.1-mini"
+};
+
+const GEMINI_MODELS = {
+  reviewer: process.env.REVIEWER_MODEL_GEMINI || "gemini-2.5-pro",
+  designer: process.env.NANO_BANANA_MODEL_GEMINI || "gemini-3.1-flash-image-preview",
+  librarian: process.env.NOTEBOOKLM_MODEL_GEMINI || "gemini-2.5-pro"
+};
+
+const GROK_MODELS = {
+  reviewer: process.env.REVIEWER_MODEL_GROK || "grok-4"
+};
+
+const PERPLEXITY_MODELS = {
+  research: process.env.PERPLEXITY_MODEL || "sonar-pro"
+};
+
+// Validators — guarantee a model ID belongs to its provider.
+function isOpenAiId(m) {
+  if (typeof m !== "string") return false;
+  const lower = m.toLowerCase();
+  return lower.startsWith("gpt-") || lower.startsWith("o1") || lower.startsWith("o3") ||
+         lower.startsWith("o4") || lower.startsWith("chatgpt-");
+}
+function isAnthropicId(m) {
+  return typeof m === "string" && m.toLowerCase().startsWith("claude-");
+}
+function isGeminiId(m) {
+  return typeof m === "string" && m.toLowerCase().startsWith("gemini-");
+}
+function isGrokId(m) {
+  return typeof m === "string" && m.toLowerCase().startsWith("grok-");
+}
+
+const VALIDATORS = {
+  openai: isOpenAiId,
+  anthropic: isAnthropicId,
+  gemini: isGeminiId,
+  grok: isGrokId
+};
+
+const FALLBACKS = {
+  openai: "gpt-4.1-mini",
+  anthropic: "claude-sonnet-4-6",
+  gemini: "gemini-2.5-pro",
+  grok: "grok-4"
+};
+
+// Per-provider role lookup with strict validation.
+export function getModelForProvider(provider, role, taskType = null) {
+  const p = (provider || "").toLowerCase();
+  const r = (role || "").toLowerCase();
+  let map;
+  if (p === "anthropic") map = ANTHROPIC_MODELS;
+  else if (p === "openai") map = OPENAI_MODELS;
+  else if (p === "gemini") map = GEMINI_MODELS;
+  else if (p === "grok") map = GROK_MODELS;
+  else if (p === "perplexity") map = PERPLEXITY_MODELS;
+  else map = OPENAI_MODELS;
+
+  let model;
+  if (p === "openai" && r === "developer") {
+    const t = (taskType || "default").toLowerCase();
+    model = map[`developer_${t}`] || map.developer_default;
+  } else {
+    model = map[r];
+  }
+
+  // Validate the chosen model truly belongs to its provider.
+  const validator = VALIDATORS[p];
+  if (validator && !validator(model)) {
+    console.warn(`[modelRouter] role=${role} provider=${provider} got non-${p} model id "${model}". Falling back to ${FALLBACKS[p]}.`);
+    model = FALLBACKS[p];
+  }
+
+  return model || FALLBACKS[p] || "gpt-4.1-mini";
+}
+
+// === Legacy compat layer ===
+// Old code still calls getProviderForRole + getModelForRole. Keep them but
+// route through the strict per-provider map.
+
 export function getProviderForRole(role) {
   const r = (role || "").toLowerCase();
   if (r === "planner") return process.env.PLANNER_PROVIDER || "anthropic";
-  if (r === "debugger") return process.env.DEBUGGER_PROVIDER || "openai";
-  if (r === "developer") return process.env.DEVELOPER_PROVIDER || "openai";
-  if (r === "reviewer") return "panel"; // claude + gemini + grok in parallel
-  if (r === "designer") return "nano_banana";
+  if (r === "debugger") return "openai";
+  if (r === "developer") return "openai";
+  if (r === "reviewer") return "panel";
+  if (r === "designer") return "gemini";
   if (r === "videographer") return "higgsfield";
   if (r === "specialist") return "manus";
-  if (r === "librarian") return "notebooklm";
+  if (r === "librarian") return "gemini";
   if (r === "research") return "perplexity";
+  if (r === "reviewer_claude") return "anthropic";
+  if (r === "reviewer_gemini") return "gemini";
+  if (r === "reviewer_grok") return "grok";
+  if (r === "classifier") return "openai";
   return "openai";
 }
 
-// --- Developer model picked by task type ---
-const DEV_TYPE_MODEL_OVERRIDES = {
-  setup: process.env.DEV_SETUP_MODEL,
-  frontend: process.env.DEV_FRONTEND_MODEL,
-  backend: process.env.DEV_BACKEND_MODEL,
-  database: process.env.DEV_DATABASE_MODEL,
-  integration: process.env.DEV_INTEGRATION_MODEL,
-  test: process.env.DEV_TEST_MODEL,
-  deploy: process.env.DEV_DEPLOY_MODEL
-};
-
-const DEV_TYPE_DEFAULTS = {
-  // Default to mini across the board so a single task can't exceed free-tier
-  // TPM limits. Debugger escalates to full gpt-4.1 only on retry.
-  setup: "gpt-4.1-mini",
-  frontend: "gpt-4.1-mini",
-  backend: "gpt-4.1-mini",
-  database: "gpt-4.1-mini",
-  integration: "gpt-4.1-mini",
-  test: "gpt-4.1-mini",
-  deploy: "gpt-4.1-mini"
-};
-
-export function getDeveloperModel(taskType) {
-  const t = (taskType || "development").toLowerCase();
-  return (
-    DEV_TYPE_MODEL_OVERRIDES[t] ||
-    DEV_TYPE_DEFAULTS[t] ||
-    process.env.DEV_DEFAULT_MODEL ||
-    process.env.OPENAI_DEVELOPER_MODEL ||
-    "gpt-4.1-mini"
-  );
-}
-
-// --- Top-level model id for a (role, taskType) tuple ---
 export function getModelForRole(role, taskType = null) {
   const r = (role || "").toLowerCase();
+  // Reviewer panel: callers expect a label, not a model id.
+  if (r === "reviewer") return "panel";
 
-  if (r === "planner") {
-    return process.env.PLANNER_MODEL || "claude-opus-4-7";
-  }
-  if (r === "developer") {
-    return getDeveloperModel(taskType);
-  }
-  if (r === "debugger") {
-    return process.env.OPENAI_DEBUGGER_MODEL || "gpt-4.1";
-  }
-  if (r === "reviewer") {
-    // Reviewer is a panel — return a label, individual clients pick their own model.
-    return "panel";
-  }
-  if (r === "designer") {
-    return process.env.NANO_BANANA_MODEL || "gemini-3.1-flash-image-preview";
-  }
-  if (r === "videographer") {
-    return process.env.HIGGSFIELD_MODEL || "higgsfield-v1";
-  }
-  if (r === "specialist") {
-    return process.env.MANUS_MODEL || "manus-v1";
-  }
-  if (r === "librarian") {
-    return process.env.NOTEBOOKLM_MODEL || "notebooklm";
-  }
-  if (r === "research") {
-    return process.env.PERPLEXITY_MODEL || "sonar-pro";
-  }
-  // Reviewer sub-roles (used by reviewer.js):
-  if (r === "reviewer_claude") {
-    return process.env.REVIEWER_CLAUDE_MODEL || process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-6";
-  }
-  if (r === "reviewer_gemini") {
-    return process.env.REVIEWER_GEMINI_MODEL || process.env.GEMINI_ANALYZER_MODEL || "gemini-2.5-pro";
-  }
-  if (r === "reviewer_grok") {
-    return process.env.REVIEWER_GROK_MODEL || process.env.GROK_REVIEWER_MODEL || "grok-4";
-  }
-
-  return process.env.OPENAI_DEFAULT_MODEL || "gpt-4.1-mini";
+  const provider = getProviderForRole(r);
+  // Map composite roles to per-provider role keys.
+  let providerRole = r;
+  if (r === "reviewer_claude") providerRole = "reviewer";
+  if (r === "reviewer_gemini") providerRole = "reviewer";
+  if (r === "reviewer_grok") providerRole = "reviewer";
+  return getModelForProvider(provider, providerRole, taskType);
 }
 
-/**
- * Decide which agent function should handle a task.
- * Returns one of: "developer" | "designer" | "videographer" | "specialist" | "librarian"
- *
- * The orchestrator uses this to dispatch to the right agent module.
- */
+export function getDeveloperModel(taskType) {
+  return getModelForProvider("openai", "developer", taskType);
+}
+
+// === Agent dispatch (unchanged) ===
 export function getAgentForTaskType(taskType) {
   const t = (taskType || "development").toLowerCase();
   if (t === "design" || t === "assets" || t === "image") return "designer";
   if (t === "video") return "videographer";
   if (t === "specialist" || t === "long_running") return "specialist";
   if (t === "docs" || t === "research_docs") return "librarian";
-  // Everything else (setup/frontend/backend/database/integration/test/deploy)
-  // goes to the OpenAI developer agent.
   return "developer";
 }
 
-/**
- * Return a flat object describing the entire routing decision for a task.
- * Useful for logging and for dashboard display.
- */
 export function describeRouting(task) {
   const taskType = task?.type || "development";
   const agent = getAgentForTaskType(taskType);
-
   let role;
   if (agent === "developer") role = "developer";
   else if (agent === "designer") role = "designer";
