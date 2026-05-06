@@ -10,7 +10,8 @@ import {
   listProjects,
   runNextTask,
   runAutonomousProject,
-  submitClarifications
+  submitClarifications,
+  replanProject
 } from "./services/orchestrator.js";
 import { estimateProjectCost } from "./services/costEstimator.js";
 import { getDeliverableUrl } from "./lib/storage.js";
@@ -379,6 +380,16 @@ app.post("/api/projects/:projectId/estimate", async (req, res) => {
     res.json({ ok: true, estimate });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/projects/:projectId/replan", requireAdminToken, async (req, res) => {
+  try {
+    const result = await replanProject(req.params.projectId);
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Replan error:", error);
+    res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
   }
 });
 

@@ -204,6 +204,47 @@ export async function submitClarifications({ projectId, answers }) {
   });
 }
 
+/**
+ * Replan a stuck project — re-runs planTasks() for any project that's still in
+ * planning state with no tasks (e.g. because a previous planner call failed).
+ * Reuses the original goal + classification stored on the project row.
+ */
+export async function replanProject(projectId) {
+  const { data: project, error } = await supabase
+    .from("projects")
+    .select("*")
+    .eq("id", projectId)
+    .single();
+  if (error) throw error;
+
+  const { data: existingTasks } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("project_id", projectId);
+
+  if ((existingTasks || []).length > 0) {
+    return { ok: false, reason: "Project already has tasks. Use run-next instead." };
+  }
+
+  const classification = {
+    kind: project.kind || "web_app",
+    suggestedName: project.name,
+    confidence: 1
+  };
+
+  const enrichedGoal = (project.clarifications && project.clarifications.length)
+    ? `${project.goal}\n\nClarifications:\n${project.clarifications.map(q => `- Q: ${q.question}\n  A: ${q.answer || q.suggestedAnswer || "(no answer)"}`).join("\n")}`
+    : project.goal;
+
+  return await planProject({
+    project,
+    goal: enrichedGoal,
+    name: project.name,
+    classification,
+    clarifications: project.clarifications || []
+  });
+}
+
 export async function getProject(projectId) {
   const { data: project, error } = await supabase
     .from("projects")
