@@ -519,13 +519,42 @@ async function openConnections() {
   modal.classList.remove("hidden");
   cards.innerHTML = `<div class="muted">Loading…</div>`;
   try {
-    const status = await api("/api/oauth/higgsfield/status");
-    const hf = renderHiggsfieldCard(status);
-    cards.innerHTML = hf;
+    const [hfStatus, manusStatus] = await Promise.all([
+      api("/api/oauth/higgsfield/status").catch(e => ({ error: e.message })),
+      api("/api/connections/manus/status").catch(e => ({ error: e.message }))
+    ]);
+    cards.innerHTML = renderHiggsfieldCard(hfStatus) + renderManusCard(manusStatus);
     document.getElementById("hf-reauth-btn")?.addEventListener("click", openHiggsfieldAuth);
   } catch (err) {
     cards.innerHTML = `<div class="muted">Failed: ${escapeHtml(err.message)}</div>`;
   }
+}
+
+function renderManusCard(s) {
+  let line, klass;
+  if (s.error) {
+    line = `Status check failed: ${s.error}`;
+    klass = "err";
+  } else if (!s.configured) {
+    line = "Not configured — set MANUS_API_KEY in Render env vars.";
+    klass = "muted";
+  } else if (s.ok) {
+    line = "Connected. Specialist tasks ready.";
+    klass = "ok";
+  } else {
+    line = `Configured but check failed (status ${s.status || "?"}). Token may be invalid.`;
+    klass = "err";
+  }
+  return `
+    <div class="connection-card">
+      <div>
+        <div class="c-name">Manus (specialist)</div>
+        <div class="c-status ${klass}">${escapeHtml(line)}</div>
+        <div class="c-meta">Static API key auth. Generate at <a href="https://manus.ai" target="_blank" rel="noopener">manus.ai</a> → API settings.</div>
+      </div>
+      <span class="muted" style="font-size:11px">Set via env</span>
+    </div>
+  `;
 }
 
 function renderHiggsfieldCard(s) {

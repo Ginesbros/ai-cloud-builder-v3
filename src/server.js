@@ -16,6 +16,7 @@ import { getDeliverableUrl } from "./lib/storage.js";
 import { listKinds } from "./pipelines/index.js";
 import { getTerms, hasAccepted, recordAcceptance, isBanned } from "./services/terms.js";
 import { getProviderStatus, persistTokens } from "./lib/oauthStore.js";
+import { manusHealthCheck } from "./agents/manusClient.js";
 import axios from "axios";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
 import { deployProjectToVercel } from "./services/vercel.js";
@@ -158,6 +159,15 @@ app.post("/api/oauth/:provider/poll", requireAdminToken, async (req, res) => {
 app.get("/api/oauth/:provider/status", requireAdminToken, async (req, res) => {
   try {
     const status = await getProviderStatus(req.params.provider);
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+app.get("/api/connections/manus/status", requireAdminToken, async (_req, res) => {
+  try {
+    const status = await manusHealthCheck();
     res.json({ ok: true, ...status });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message });
