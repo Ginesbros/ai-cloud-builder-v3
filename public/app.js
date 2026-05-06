@@ -107,16 +107,18 @@ function renderProjects() {
     return;
   }
   ul.innerHTML = state.projects
-    .map(
-      p => `
+    .map(p => {
+      const cost = Number(p.estimated_spend_usd || 0);
+      const costStr = cost === 0 ? "$0" : (cost < 0.01 ? "<$0.01" : cost < 1 ? `$${cost.toFixed(3)}` : `$${cost.toFixed(2)}`);
+      return `
       <li data-id="${p.id}" class="${state.current === p.id ? "active" : ""}">
         <div class="p-name">${escapeHtml(p.name || "(unnamed)")}</div>
         <div class="p-meta">
           <span class="status-badge status-${p.status}">${p.status}</span>
-          · ${fmtRel(p.updated_at)} · $${Number(p.estimated_spend_usd || 0).toFixed(2)}
+          · ${fmtRel(p.updated_at)} · <span style="color: var(--accent); font-weight: 600">${costStr}</span>
         </div>
-      </li>`
-    )
+      </li>`;
+    })
     .join("");
   ul.querySelectorAll("li[data-id]").forEach(li => {
     li.addEventListener("click", () => selectProject(li.dataset.id));
@@ -157,7 +159,9 @@ function renderDetail() {
   chips.push(`<span class="chip">autonomy: ${p.autonomy_mode}</span>`);
   if (p.repo_url) chips.push(`<span class="chip acc">repo: <a href="${p.repo_url}" target="_blank" rel="noopener">${p.repo_name}</a></span>`);
   if (p.vercel_url) chips.push(`<span class="chip acc">vercel: <a href="${p.vercel_url}" target="_blank" rel="noopener">live</a></span>`);
-  chips.push(`<span class="chip">spend: $${Number(p.estimated_spend_usd || 0).toFixed(2)}</span>`);
+  const spendValue = Number(p.estimated_spend_usd || 0);
+  const spendStr = spendValue < 0.01 && spendValue > 0 ? "$0.00<" : `$${spendValue.toFixed(spendValue < 1 ? 4 : 2)}`;
+  chips.push(`<span class="chip" style="background: rgba(47,212,194,0.10); color: var(--accent); border-color: rgba(47,212,194,0.3)">cost: ${spendStr}</span>`);
   $("#d-meta").innerHTML = chips.join("");
 
   // Tasks
@@ -273,13 +277,40 @@ function renderDetail() {
   const spent = Number(d.budget?.monthlySpend || 0);
   const projectSpent = Number(p.estimated_spend_usd || 0);
   const pct = cfg.monthlyBudget ? Math.min(100, (spent / cfg.monthlyBudget) * 100) : 0;
+
+  // Per-role breakdown for THIS project
+  const usage = d.aiUsage || [];
+  const byRole = {};
+  let calls = 0;
+  for (const u of usage) {
+    const role = u.role || "unknown";
+    if (!byRole[role]) byRole[role] = { cost: 0, calls: 0, tokensIn: 0, tokensOut: 0, model: u.model };
+    byRole[role].cost += Number(u.estimated_cost_usd || 0);
+    byRole[role].calls += 1;
+    byRole[role].tokensIn += Number(u.input_tokens || 0);
+    byRole[role].tokensOut += Number(u.output_tokens || 0);
+    calls += 1;
+  }
+  const roleRows = Object.entries(byRole)
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .map(([role, info]) => `
+      <tr>
+        <td><span class="agent-badge ${role}">${escapeHtml(role)}</span></td>
+        <td class="muted" style="font-family: ui-monospace,monospace; font-size:11px">${escapeHtml(info.model || "—")}</td>
+        <td>${info.calls}</td>
+        <td>${(info.tokensIn + info.tokensOut).toLocaleString()}</td>
+        <td style="font-weight:600">$${info.cost.toFixed(4)}</td>
+      </tr>
+    `).join("");
+
   $("#spend-grid").innerHTML = `
-    <div class="spend-card">
-      <div class="label">This project</div>
-      <div class="value">$${projectSpent.toFixed(2)}</div>
+    <div class="spend-card" style="grid-column: span 2; background: linear-gradient(135deg, rgba(47,212,194,0.10), rgba(79,140,255,0.08));">
+      <div class="label">This project total</div>
+      <div class="value" style="font-size:32px">$${projectSpent.toFixed(4)}</div>
+      <div class="muted" style="margin-top:6px">${calls} AI call${calls === 1 ? "" : "s"} across ${Object.keys(byRole).length} role${Object.keys(byRole).length === 1 ? "" : "s"}</div>
     </div>
     <div class="spend-card">
-      <div class="label">Monthly total</div>
+      <div class="label">Monthly total (all projects)</div>
       <div class="value">$${spent.toFixed(2)}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
       <div class="muted" style="margin-top:6px">of $${cfg.monthlyBudget || 0} (${cfg.mode || "—"})</div>
@@ -289,6 +320,19 @@ function renderDetail() {
       <div class="value" style="font-size:14px">$${(cfg.softLimit || 0).toFixed(0)} / $${(cfg.hardLimit || 0).toFixed(0)}</div>
     </div>
   `;
+
+  // Per-role breakdown table BELOW the cards.
+  if (roleRows) {
+    $("#spend-grid").insertAdjacentHTML("beforeend", `
+      <div style="grid-column: 1 / -1; margin-top: 16px;">
+        <h2 style="margin-bottom:10px">Cost breakdown by role</h2>
+        <table class="data-table">
+          <thead><tr><th>Role</th><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+          <tbody>${roleRows}</tbody>
+        </table>
+      </div>
+    `);
+  }
 }
 
 // Best-effort routing fallback when a task hasn't run yet (no .result.routing).
