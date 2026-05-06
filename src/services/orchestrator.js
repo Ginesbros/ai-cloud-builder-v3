@@ -111,6 +111,24 @@ async function planProject({ project, goal, name, classification, clarifications
     projectId: project.id
   });
 
+  // Guard: refuse to enter awaiting_approval with an empty plan. This would
+  // let runNextTask immediately mark the project complete with zero output
+  // (silent-success bug).
+  if (!plan || !Array.isArray(plan.tasks) || plan.tasks.length === 0) {
+    await supabase.from("projects").update({
+      status: "failed",
+      current_stage: "plan_empty",
+      updated_at: new Date().toISOString()
+    }).eq("id", project.id);
+    await logEvent({
+      projectId: project.id,
+      level: "error",
+      message: "Planner returned an empty task list. Project marked failed. Use Refine plan or recreate.",
+      data: { plan }
+    });
+    throw new Error("Planner returned no tasks. Marked project as failed; refine or recreate.");
+  }
+
   const projectName = safeName(name || classification.suggestedName || plan.projectName || "ai-project");
 
   // Plan-first workflow: project enters awaiting_approval after planning.
@@ -543,6 +561,24 @@ export async function runNextTask(projectId) {
   if (error) throw error;
 
   if (!task) {
+    // Guard: don't mark complete if there were never any tasks. That means
+    // the planner produced an empty plan and we somehow got here.
+    const { count: totalCount } = await supabase
+      .from("tasks").select("*", { count: "exact", head: true }).eq("project_id", projectId);
+    if (!totalCount || totalCount === 0) {
+      await supabase.from("projects").update({
+        status: "failed",
+        current_stage: "plan_empty",
+        updated_at: new Date().toISOString()
+      }).eq("id", projectId);
+      await logEvent({
+        projectId,
+        level: "error",
+        message: "Cannot complete project with zero tasks. Marked failed. Use Refine plan to retry."
+      });
+      return { done: true, message: "Project has no tasks. Marked failed." };
+    }
+
     await supabase.from("projects").update({
       status: "complete", current_stage: "complete",
       updated_at: new Date().toISOString()
@@ -579,6 +615,12 @@ export async function approveProjectPlan(projectId) {
   if (error) throw error;
   if (project.status === "complete" || project.status === "building") {
     return { ok: true, alreadyRunning: true };
+  }
+  // Guard: don't approve a plan that has zero tasks attached.
+  const { count: taskCount } = await supabase
+    .from("tasks").select("*", { count: "exact", head: true }).eq("project_id", projectId);
+  if (!taskCount || taskCount === 0) {
+    throw new Error("This project has no tasks to build. The plan came back empty — use Refine plan with notes, or delete and recreate the project.");
   }
   await supabase.from("projects").update({
     awaiting_approval: false,

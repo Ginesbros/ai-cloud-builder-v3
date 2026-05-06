@@ -8,10 +8,20 @@ function isConfigured() {
   return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
+// Defensive: if a non-Claude model ID slips in via env vars, coerce it back
+// to a sensible Claude default so the call doesn't 400.
+function coerceClaudeModel(model, role) {
+  if (!model || typeof model !== "string" || !model.toLowerCase().startsWith("claude-")) {
+    if (role === "planner") return "claude-opus-4-7";
+    return "claude-sonnet-4-6";
+  }
+  return model;
+}
+
 function pickModel(role) {
-  if (role === "planner") return process.env.PLANNER_MODEL || "claude-opus-4-7";
-  if (role === "reviewer_claude") return getModelForRole("reviewer_claude");
-  return process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-6";
+  if (role === "planner") return coerceClaudeModel(process.env.PLANNER_MODEL || "claude-opus-4-7", role);
+  if (role === "reviewer_claude") return coerceClaudeModel(getModelForRole("reviewer_claude"), role);
+  return coerceClaudeModel(process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-6", role);
 }
 
 /**

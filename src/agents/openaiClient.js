@@ -32,6 +32,21 @@ function extractText(response) {
     .join("");
 }
 
+// Defensive: only OpenAI-shaped model IDs are valid here. If the model router
+// returns a Claude/Gemini/Grok ID by accident (e.g. PLANNER_MODEL points at
+// Claude but the pipeline calls askOpenAI), we transparently fall back to a
+// sensible OpenAI model so the build doesn't crash silently.
+function coerceOpenAiModel(model, role) {
+  if (!model || typeof model !== "string") return process.env.OPENAI_DEFAULT_MODEL || "gpt-4.1-mini";
+  const m = model.toLowerCase();
+  const isOpenAi = m.startsWith("gpt-") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4") || m.startsWith("chatgpt-");
+  if (isOpenAi) return model;
+  // Pick a fallback based on role.
+  if (role === "planner") return process.env.OPENAI_PLANNER_FALLBACK || "gpt-4.1";
+  if (role === "debugger") return process.env.OPENAI_DEBUGGER_MODEL || "gpt-4.1-mini";
+  return process.env.OPENAI_DEFAULT_MODEL || "gpt-4.1-mini";
+}
+
 export async function askOpenAI({
   role = "developer",
   taskType = null,
@@ -42,7 +57,8 @@ export async function askOpenAI({
   taskId = null,
   modelOverride = null
 }) {
-  const model = modelOverride || getModelForRole(role, taskType);
+  const rawModel = modelOverride || getModelForRole(role, taskType);
+  const model = coerceOpenAiModel(rawModel, role);
 
   const response = await openai.responses.create({
     model,
