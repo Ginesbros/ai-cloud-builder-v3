@@ -52,6 +52,8 @@ function getUserId(req) {
 }
 
 async function requireTermsAccepted(req, res, next) {
+  // Single-user / dev mode: skip the gate entirely.
+  if (process.env.TOS_ENABLED === "false") return next();
   try {
     const userId = getUserId(req);
     const ban = await isBanned(userId);
@@ -182,6 +184,18 @@ app.get("/api/terms", (_req, res) => {
 });
 
 app.get("/api/terms/status", async (req, res) => {
+  // Bypass mode: tell the dashboard ToS isn't required.
+  if (process.env.TOS_ENABLED === "false") {
+    return res.json({
+      ok: true,
+      userId: getUserId(req),
+      accepted: true,
+      acceptedVersion: "bypass",
+      currentVersion: "bypass",
+      banned: false,
+      bypassed: true
+    });
+  }
   try {
     const userId = getUserId(req);
     const status = await hasAccepted(userId);
