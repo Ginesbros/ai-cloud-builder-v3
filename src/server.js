@@ -24,6 +24,7 @@ import { manusHealthCheck } from "./agents/manusClient.js";
 import axios from "axios";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
 import { deployProjectToVercel, deployPreview, publishToProduction } from "./services/vercel.js";
+import { fileIdea, listIdeas, processIdea, rejectIdea, rollbackIdea, scanLogsAndFileIdeas } from "./services/selfImprover.js";
 
 dotenv.config();
 
@@ -423,6 +424,67 @@ app.post("/api/projects/:projectId/publish", async (req, res) => {
   } catch (error) {
     console.error("Publish error:", error);
     res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
+  }
+});
+
+// === Self-improvement inbox ===
+app.get("/api/improvements", async (req, res) => {
+  try {
+    const status = req.query.status || null;
+    const items = await listIdeas({ status, limit: 100 });
+    res.json({ ok: true, items });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/improvements", async (req, res) => {
+  try {
+    const { title, description, scope } = req.body || {};
+    const idea = await fileIdea({ title, description, scope, source: "user" });
+    res.json({ ok: true, idea });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/improvements/:id/process", requireAdminToken, async (req, res) => {
+  try {
+    const result = await processIdea(req.params.id);
+    res.json({ ok: result.ok !== false, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/improvements/:id/reject", requireAdminToken, async (req, res) => {
+  try {
+    const reason = (req.body && req.body.reason) || "rejected by user";
+    const result = await rejectIdea(req.params.id, reason);
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/improvements/:id/rollback", requireAdminToken, async (req, res) => {
+  try {
+    const result = await rollbackIdea(req.params.id);
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/improvements/scan-logs", requireAdminToken, async (req, res) => {
+  try {
+    const result = await scanLogsAndFileIdeas({
+      hours: Number(req.body?.hours || 24),
+      minOccurrences: Number(req.body?.minOccurrences || 3)
+    });
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
   }
 });
 

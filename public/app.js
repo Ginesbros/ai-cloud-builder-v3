@@ -547,6 +547,105 @@ $("#refresh-btn").addEventListener("click", async () => {
 });
 $("#reload-projects").addEventListener("click", loadProjects);
 
+/* --- Self-improvement inbox --- */
+async function loadImprovements() {
+  const ul = document.getElementById("improvement-list");
+  if (!ul) return;
+  ul.innerHTML = '<li class="muted">Loading…</li>';
+  try {
+    const data = await api("/api/improvements");
+    const items = data.items || [];
+    if (items.length === 0) {
+      ul.innerHTML = '<li class="muted">No ideas yet. File one above.</li>';
+      return;
+    }
+    ul.innerHTML = items.map(i => {
+      const statusColor = ({
+        queued: "#94a3b8", planning: "#4f8cff", building: "#4f8cff", reviewing: "#4f8cff",
+        pr_open: "#34d399", merged: "#34d399", failed: "#f87171", skipped: "#fbbf24", rejected: "#94a3b8"
+      })[i.status] || "#94a3b8";
+      const actions = [];
+      if (i.status === "queued") {
+        actions.push(`<button class="btn tiny primary" data-act="process" data-id="${i.id}">Build PR</button>`);
+        actions.push(`<button class="btn tiny ghost" data-act="reject" data-id="${i.id}">Reject</button>`);
+      }
+      if (i.pr_url) actions.push(`<a class="btn tiny" href="${i.pr_url}" target="_blank" rel="noopener">View PR</a>`);
+      return `
+        <li class="improvement-item" style="border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:12px; margin-bottom:8px; background:rgba(0,0,0,0.2);">
+          <div style="display:flex; justify-content:space-between; align-items:start; gap:10px; flex-wrap:wrap;">
+            <div style="flex:1; min-width:0;">
+              <div style="font-weight:600;">${escapeHtml(i.title)}</div>
+              <div class="muted" style="font-size:12px; margin-top:2px;">
+                ${escapeHtml(i.scope || "small")} · source: ${escapeHtml(i.source)} · ${fmtRel(i.created_at)}
+              </div>
+              ${i.description ? `<div class="muted" style="font-size:12px; margin-top:4px;">${escapeHtml(i.description.slice(0, 240))}</div>` : ""}
+              ${i.error ? `<div style="color:#f87171; font-size:12px; margin-top:4px;">${escapeHtml(i.error)}</div>` : ""}
+              ${i.forbidden_violation ? `<div style="color:#fbbf24; font-size:12px; margin-top:4px;">🚫 ${escapeHtml(i.forbidden_violation)}</div>` : ""}
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+              <span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:${statusColor}22; color:${statusColor}; border:1px solid ${statusColor}55;">${i.status}</span>
+              <div style="display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end;">${actions.join("")}</div>
+            </div>
+          </div>
+        </li>`;
+    }).join("");
+    // Wire action buttons
+    ul.querySelectorAll("[data-act]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const act = btn.dataset.act;
+        if (act === "process") {
+          if (!confirm("Build a PR for this idea? Costs ~$1–$5 in model credits.")) return;
+          btn.disabled = true; btn.textContent = "Building…";
+          try {
+            const r = await api(`/api/improvements/${id}/process`, { method: "POST" });
+            const url = r.result?.result?.prUrl || r.result?.prUrl;
+            toast(url ? `PR opened: ${url}` : (r.result?.error || "Done."), url ? "success" : "error");
+            await loadImprovements();
+          } catch (err) { toast(err.message, "error"); btn.disabled = false; btn.textContent = "Build PR"; }
+        } else if (act === "reject") {
+          const reason = prompt("Why reject this idea? (optional)") || "rejected by user";
+          try {
+            await api(`/api/improvements/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+            await loadImprovements();
+          } catch (err) { toast(err.message, "error"); }
+        }
+      });
+    });
+  } catch (err) {
+    ul.innerHTML = `<li class="muted" style="color:var(--error)">Failed to load: ${escapeHtml(err.message)}</li>`;
+  }
+}
+
+document.addEventListener("click", e => {
+  if (e.target?.matches(".tab[data-tab='improve']")) loadImprovements();
+});
+
+document.getElementById("si-submit")?.addEventListener("click", async () => {
+  const title = document.getElementById("si-title").value.trim();
+  const description = document.getElementById("si-desc").value.trim();
+  const scope = document.getElementById("si-scope").value;
+  if (!title || title.length < 4) { toast("Title too short.", "error"); return; }
+  try {
+    await api("/api/improvements", { method: "POST", body: JSON.stringify({ title, description, scope }) });
+    document.getElementById("si-title").value = "";
+    document.getElementById("si-desc").value = "";
+    toast("Idea queued.", "success");
+    await loadImprovements();
+  } catch (err) { toast(err.message, "error"); }
+});
+
+document.getElementById("si-refresh")?.addEventListener("click", loadImprovements);
+
+document.getElementById("si-scan-logs")?.addEventListener("click", async () => {
+  toast("Scanning logs…");
+  try {
+    const r = await api("/api/improvements/scan-logs", { method: "POST", body: JSON.stringify({ hours: 24, minOccurrences: 3 }) });
+    toast(`Filed ${r.result?.filed || 0} idea(s) from ${r.result?.scanned || 0} log entries.`, "success");
+    await loadImprovements();
+  } catch (err) { toast(err.message, "error"); }
+});
+
 /* --- Plan approval / refinement --- */
 $("#btn-approve-plan")?.addEventListener("click", async () => {
   if (!state.current) return;

@@ -216,3 +216,35 @@ alter table projects add column if not exists preview_expires_at timestamptz;
 alter table projects add column if not exists production_url text;
 alter table projects add column if not exists published_at timestamptz;
 create index if not exists idx_projects_status_updated on projects(status, updated_at desc);
+
+-- migration 007: self-improvement
+create table if not exists improvement_ideas (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  source text not null default 'user',
+  status text not null default 'queued',
+  scope text default 'small',
+  branch_name text,
+  pr_url text,
+  pr_number int,
+  merge_commit_sha text,
+  reverted_at timestamptz,
+  estimated_cost_usd numeric default 0,
+  actual_cost_usd numeric default 0,
+  cost_cap_usd numeric default 5,
+  forbidden_violation text,
+  error text,
+  result jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_improvement_ideas_status_created on improvement_ideas(status, created_at desc);
+create index if not exists idx_improvement_ideas_source on improvement_ideas(source);
+
+create table if not exists self_improvement_quota (
+  day date primary key,
+  prs_opened int default 0,
+  ideas_processed int default 0,
+  total_cost_usd numeric default 0
+);

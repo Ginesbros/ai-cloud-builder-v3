@@ -149,6 +149,7 @@
             <button class="tab" data-tab="sandbox">Sandbox</button>
             <button class="tab" data-tab="spend">Spending</button>
             <button class="tab" data-tab="library">Library</button>
+            <button class="tab" data-tab="improve">Self-Improve</button>
           </nav>
 
           <div class="tab-panel" data-panel="tasks">
@@ -200,6 +201,32 @@
               </select>
             </div>
             <ul class="library-list" id="library-list"></ul>
+          </div>
+
+          <div class="tab-panel hidden" data-panel="improve">
+            <div class="card" style="margin-bottom:14px">
+              <h3 style="margin-top:0">File a self-improvement idea</h3>
+              <p class="muted" style="font-size:12px; margin-bottom:10px">
+                The orchestrator will plan, build, review and open a pull request against its own repo. Nothing merges to main automatically. Forbidden: auth, billing, secrets, the self-improver itself.
+              </p>
+              <input id="si-title" type="text" placeholder="Short title (e.g. Fix toast hidden behind modal)" style="width:100%; padding:8px; margin-bottom:8px; background:rgba(0,0,0,0.25); color:var(--text); border:1px solid rgba(255,255,255,0.12); border-radius:6px;">
+              <textarea id="si-desc" rows="3" placeholder="Describe the change in detail. What's the current behavior? What should it do instead?" style="width:100%; padding:8px; background:rgba(0,0,0,0.25); color:var(--text); border:1px solid rgba(255,255,255,0.12); border-radius:6px; font:inherit; resize:vertical;"></textarea>
+              <div style="display:flex; gap:8px; margin-top:8px;">
+                <select id="si-scope" style="padding:6px; background:rgba(0,0,0,0.25); color:var(--text); border:1px solid rgba(255,255,255,0.12); border-radius:6px;">
+                  <option value="bugfix">Bug fix</option>
+                  <option value="small" selected>Small feature</option>
+                  <option value="feature">Feature</option>
+                  <option value="bigfeature">Big feature</option>
+                </select>
+                <button class="btn primary" id="si-submit">File idea</button>
+                <button class="btn ghost" id="si-scan-logs" title="Scan recent error logs and auto-file ideas for repeating errors">Scan logs for issues</button>
+              </div>
+            </div>
+            <div class="row-between" style="margin-bottom:8px">
+              <h3 style="margin:0">Ideas</h3>
+              <button class="btn tiny ghost" id="si-refresh">refresh</button>
+            </div>
+            <ul class="improvement-list" id="improvement-list"></ul>
           </div>
         </div>
       </section>
