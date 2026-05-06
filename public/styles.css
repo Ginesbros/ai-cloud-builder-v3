@@ -188,7 +188,7 @@ form button[type="submit"] { width: 100%; margin-top: 12px; }
 .empty h1 { color: var(--text); margin-bottom: 10px; }
 
 .detail { display: flex; flex-direction: column; gap: 16px; }
-.detail.hidden, .empty.hidden, .tab-panel.hidden, .toast.hidden { display: none; }
+.detail.hidden, .empty.hidden, .tab-panel.hidden, .toast.hidden, .modal.hidden { display: none !important; }
 
 .detail-head {
   display: flex;
