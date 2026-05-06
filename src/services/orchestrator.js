@@ -490,19 +490,55 @@ export async function runSpecificTask(projectId, task) {
     // Code-pipeline projects get reviewed + GitHub-pushed.
     const isCodePipeline = ["web_app", "static_site", "backend_api", "mobile_app", "script", "automation"].includes(project.kind);
     if (isCodePipeline) {
-      const review = await reviewProject({
-        project, task,
-        files: await getFiles(projectId)
-      });
-      result.review = review;
+      // Review panel is best-effort — review failures must not block builds.
+      const reviewEnabled = process.env.REVIEW_PANEL_ENABLED !== "false";
+      if (reviewEnabled) {
+        try {
+          const review = await reviewProject({
+            project, task,
+            files: await getFiles(projectId)
+          });
+          result.review = review;
+        } catch (revErr) {
+          await logEvent({
+            projectId, taskId: task.id, level: "warn",
+            message: `Review panel skipped: ${revErr?.message || revErr}.`
+          });
+        }
+      }
 
-      const repo = await createRepoIfNeeded(project);
-      await upsertFilesToGitHub({ projectId, repoName: repo.repoName });
-      await supabase.from("projects").update({
-        repo_name: repo.repoName, repo_url: repo.repoUrl,
-        status: "building", last_worker_heartbeat: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }).eq("id", projectId);
+      // GitHub push is best-effort. The files are already saved in Supabase
+      // and downloadable from the dashboard. If GitHub creds are missing,
+      // permissions are wrong, or the API is flaky, log a warning but never
+      // fail the task — the user still gets their files.
+      const githubEnabled = process.env.GITHUB_PUSH_ENABLED !== "false"
+        && process.env.GITHUB_TOKEN && process.env.GITHUB_OWNER;
+      if (githubEnabled) {
+        try {
+          const repo = await createRepoIfNeeded(project);
+          await upsertFilesToGitHub({ projectId, repoName: repo.repoName });
+          await supabase.from("projects").update({
+            repo_name: repo.repoName, repo_url: repo.repoUrl,
+            status: "building", last_worker_heartbeat: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }).eq("id", projectId);
+        } catch (ghErr) {
+          await logEvent({
+            projectId, taskId: task.id, level: "warn",
+            message: `GitHub push skipped: ${ghErr?.message || ghErr}. Files still saved in Supabase.`,
+            data: { error: ghErr?.message }
+          });
+          await supabase.from("projects").update({
+            status: "building", last_worker_heartbeat: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }).eq("id", projectId);
+        }
+      } else {
+        await supabase.from("projects").update({
+          status: "building", last_worker_heartbeat: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }).eq("id", projectId);
+      }
     }
 
     await supabase.from("tasks").update({
