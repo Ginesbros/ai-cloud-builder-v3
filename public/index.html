@@ -100,6 +100,38 @@
             <div id="estimate-comparables" class="estimate-comparables"></div>
           </div>
 
+          <div id="approval-banner" class="approval-banner hidden">
+            <div class="approval-head">
+              <strong>Plan ready — review before building</strong>
+              <span class="muted" id="approval-revision"></span>
+            </div>
+            <p class="muted" style="margin-bottom:10px">
+              Approve to start the paid build, or send refinement notes back to the planner (cheap — only the planner re-runs, no developer/designer credits spent).
+            </p>
+            <div class="approval-actions">
+              <button class="btn primary" id="btn-approve-plan">Approve &amp; Build</button>
+              <button class="btn" id="btn-toggle-refine">Refine plan</button>
+            </div>
+            <div id="refine-form" class="hidden" style="margin-top:12px">
+              <label class="muted" style="font-size:12px">What should change?</label>
+              <textarea id="refine-notes" rows="3" placeholder="e.g. drop the testimonials section, add a blog with 3 posts, use Next.js instead of Vite"></textarea>
+              <button class="btn primary" id="btn-submit-refine" style="margin-top:8px">Send notes &amp; replan</button>
+            </div>
+          </div>
+
+          <div id="preview-panel" class="preview-panel hidden">
+            <div class="preview-head">
+              <strong>Live preview</strong>
+              <div class="preview-actions">
+                <a id="preview-open" class="btn tiny" target="_blank" rel="noopener">Open in tab</a>
+                <button class="btn tiny" id="btn-redeploy-preview">Redeploy</button>
+                <button class="btn primary tiny" id="btn-publish">Publish</button>
+              </div>
+            </div>
+            <iframe id="preview-frame" src="about:blank" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <div id="published-line" class="muted" style="margin-top:6px; font-size:12px;"></div>
+          </div>
+
           <div id="clarification-banner" class="clarification hidden">
             <div class="clarification-head">
               <strong>A few quick questions before I start</strong>

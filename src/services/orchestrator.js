@@ -113,15 +113,18 @@ async function planProject({ project, goal, name, classification, clarifications
 
   const projectName = safeName(name || classification.suggestedName || plan.projectName || "ai-project");
 
+  // Plan-first workflow: project enters awaiting_approval after planning.
+  // No paid developer/designer/reviewer work runs until the user clicks Approve.
   const { data: updated, error } = await supabase
     .from("projects")
     .update({
       name: projectName,
       kind: classification.kind,
       awaiting_clarification: false,
-      status: "planned",
+      awaiting_approval: true,
+      status: "awaiting_approval",
       plan,
-      current_stage: "planned",
+      current_stage: "awaiting_approval",
       updated_at: new Date().toISOString()
     })
     .eq("id", project.id)
@@ -525,9 +528,12 @@ export async function runSpecificTask(projectId, task) {
 }
 
 export async function runNextTask(projectId) {
-  const { data: project } = await supabase.from("projects").select("awaiting_clarification").eq("id", projectId).single();
+  const { data: project } = await supabase.from("projects").select("awaiting_clarification, awaiting_approval, status").eq("id", projectId).single();
   if (project?.awaiting_clarification) {
     return { done: false, message: "Project is awaiting clarification answers." };
+  }
+  if (project?.awaiting_approval || project?.status === "awaiting_approval") {
+    return { done: false, message: "Project plan needs your approval before building. Click Approve & Build on the project page." };
   }
 
   const { data: task, error } = await supabase
@@ -544,11 +550,86 @@ export async function runNextTask(projectId) {
     // Record estimate vs actual for calibration.
     await recordActualCost(projectId).catch(() => null);
     await logEvent({ projectId, message: "Project complete." });
+
+    // Auto-trigger preview deploy so the user can play with the result.
+    // Only attempts if VERCEL_TOKEN is configured; failure here doesn't block completion.
+    try {
+      const { deployPreview } = await import("./vercel.js");
+      const previewResult = await deployPreview(projectId);
+      if (previewResult?.previewUrl) {
+        await logEvent({ projectId, message: `Preview ready: ${previewResult.previewUrl}` });
+      }
+    } catch (err) {
+      await logEvent({ projectId, level: "warn", message: "Auto preview deploy failed.", data: { error: err.message } });
+    }
+
     return { done: true, message: "No pending tasks." };
   }
 
   await supabase.from("tasks").update({ status: "running", attempts: task.attempts + 1 }).eq("id", task.id);
   return runSpecificTask(projectId, { ...task, attempts: task.attempts + 1 });
+}
+
+/**
+ * Approve a planned project so building can begin. Idempotent.
+ */
+export async function approveProjectPlan(projectId) {
+  const { data: project, error } = await supabase
+    .from("projects").select("id, status, awaiting_approval").eq("id", projectId).single();
+  if (error) throw error;
+  if (project.status === "complete" || project.status === "building") {
+    return { ok: true, alreadyRunning: true };
+  }
+  await supabase.from("projects").update({
+    awaiting_approval: false,
+    approved_at: new Date().toISOString(),
+    status: "planned",
+    current_stage: "planned",
+    updated_at: new Date().toISOString()
+  }).eq("id", projectId);
+  await logEvent({ projectId, message: "Plan approved by user. Build can start." });
+  return { ok: true };
+}
+
+/**
+ * Refine the plan: discard existing tasks, store user notes, and replan with cheap planner.
+ * Only the planner runs (no developer/designer credits) so iteration is cheap.
+ */
+export async function refineProjectPlan(projectId, notes) {
+  const { data: project, error } = await supabase
+    .from("projects").select("*").eq("id", projectId).single();
+  if (error) throw error;
+
+  // Wipe pending tasks from the previous draft.
+  await supabase.from("tasks").delete().eq("project_id", projectId);
+
+  await supabase.from("projects").update({
+    refine_notes: notes || null,
+    plan_revision: (project.plan_revision || 1) + 1,
+    updated_at: new Date().toISOString()
+  }).eq("id", projectId);
+
+  await logEvent({
+    projectId,
+    message: `Plan refinement requested (revision ${(project.plan_revision || 1) + 1}).`,
+    data: { notes }
+  });
+
+  const refinedGoal = `${project.goal}\n\nRefinement notes from user (revision ${(project.plan_revision || 1) + 1}):\n${notes || "(no notes)"}`;
+
+  const classification = {
+    kind: project.kind || "web_app",
+    suggestedName: project.name,
+    confidence: 1
+  };
+
+  return await planProject({
+    project,
+    goal: refinedGoal,
+    name: project.name,
+    classification,
+    clarifications: project.clarifications || []
+  });
 }
 
 export async function runAutonomousProject(projectId) {

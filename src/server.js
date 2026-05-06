@@ -11,7 +11,9 @@ import {
   runNextTask,
   runAutonomousProject,
   submitClarifications,
-  replanProject
+  replanProject,
+  approveProjectPlan,
+  refineProjectPlan
 } from "./services/orchestrator.js";
 import { estimateProjectCost } from "./services/costEstimator.js";
 import { getDeliverableUrl } from "./lib/storage.js";
@@ -21,7 +23,7 @@ import { getProviderStatus, persistTokens } from "./lib/oauthStore.js";
 import { manusHealthCheck } from "./agents/manusClient.js";
 import axios from "axios";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
-import { deployProjectToVercel } from "./services/vercel.js";
+import { deployProjectToVercel, deployPreview, publishToProduction } from "./services/vercel.js";
 
 dotenv.config();
 
@@ -380,6 +382,47 @@ app.post("/api/projects/:projectId/estimate", async (req, res) => {
     res.json({ ok: true, estimate });
   } catch (error) {
     res.status(500).json({ ok: false, error: error?.message });
+  }
+});
+
+app.post("/api/projects/:projectId/approve", async (req, res) => {
+  try {
+    const result = await approveProjectPlan(req.params.projectId);
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Approve error:", error);
+    res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
+  }
+});
+
+app.post("/api/projects/:projectId/refine", async (req, res) => {
+  try {
+    const notes = (req.body && req.body.notes) || "";
+    const result = await refineProjectPlan(req.params.projectId, notes);
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Refine error:", error);
+    res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
+  }
+});
+
+app.post("/api/projects/:projectId/preview", async (req, res) => {
+  try {
+    const result = await deployPreview(req.params.projectId);
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Preview error:", error);
+    res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
+  }
+});
+
+app.post("/api/projects/:projectId/publish", async (req, res) => {
+  try {
+    const result = await publishToProduction(req.params.projectId);
+    res.json({ ok: true, result });
+  } catch (error) {
+    console.error("Publish error:", error);
+    res.status(500).json({ ok: false, error: error?.message || JSON.stringify(error) });
   }
 });
 

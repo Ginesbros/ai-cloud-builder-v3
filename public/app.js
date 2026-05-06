@@ -72,9 +72,12 @@ async function api(path, opts = {}) {
 
 function toast(message, type = "info") {
   const el = $("#toast");
-  el.textContent = message;
+  // Errors are sticky until the user dismisses them; info/success auto-hide.
+  el.innerHTML = type === "error"
+    ? `${escapeHtml(String(message))} <span style="opacity:.6;cursor:pointer;margin-left:8px" onclick="this.parentElement.classList.add('hidden')">✕</span>`
+    : escapeHtml(String(message));
   el.className = `toast ${type}`;
-  setTimeout(() => el.classList.add("hidden"), 4000);
+  if (type !== "error") setTimeout(() => el.classList.add("hidden"), 4000);
 }
 
 /* --- Budget pill --- */
@@ -233,6 +236,39 @@ function renderDetail() {
   } else {
     banner.classList.add("hidden");
     qContainer.innerHTML = "";
+  }
+
+  // Approval banner — shown when plan is ready but not yet approved
+  const approvalBanner = document.getElementById("approval-banner");
+  if ((p.awaiting_approval || p.status === "awaiting_approval") && !p.awaiting_clarification) {
+    approvalBanner.classList.remove("hidden");
+    document.getElementById("approval-revision").textContent =
+      p.plan_revision && p.plan_revision > 1 ? `revision ${p.plan_revision}` : "";
+  } else {
+    approvalBanner.classList.add("hidden");
+    document.getElementById("refine-form")?.classList.add("hidden");
+  }
+
+  // Disable run buttons while awaiting approval
+  const awaitingApproval = !!(p.awaiting_approval || p.status === "awaiting_approval");
+  document.getElementById("btn-run-next").disabled = awaitingApproval;
+  document.getElementById("btn-run-auto").disabled = awaitingApproval;
+
+  // Preview panel — shown once a preview URL exists
+  const previewPanel = document.getElementById("preview-panel");
+  if (p.preview_url || p.production_url) {
+    previewPanel.classList.remove("hidden");
+    const url = p.preview_url || p.production_url;
+    document.getElementById("preview-frame").src = url;
+    document.getElementById("preview-open").href = url;
+    const pubLine = document.getElementById("published-line");
+    if (p.production_url) {
+      pubLine.innerHTML = `Published → <a href="${p.production_url}" target="_blank" rel="noopener">${p.production_url}</a>`;
+    } else {
+      pubLine.textContent = "Preview only — click Publish to push to production.";
+    }
+  } else {
+    previewPanel.classList.add("hidden");
   }
 
   // Files
@@ -510,6 +546,70 @@ $("#refresh-btn").addEventListener("click", async () => {
   await Promise.all([loadProjects(), loadBudget(), loadDetail()]);
 });
 $("#reload-projects").addEventListener("click", loadProjects);
+
+/* --- Plan approval / refinement --- */
+$("#btn-approve-plan")?.addEventListener("click", async () => {
+  if (!state.current) return;
+  if (!confirm("Approve the plan and start the paid build?")) return;
+  try {
+    await api(`/api/projects/${state.current}/approve`, { method: "POST" });
+    toast("Plan approved — ready to build.", "success");
+    await Promise.all([loadDetail(), loadProjects()]);
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+$("#btn-toggle-refine")?.addEventListener("click", () => {
+  document.getElementById("refine-form").classList.toggle("hidden");
+});
+
+$("#btn-submit-refine")?.addEventListener("click", async () => {
+  if (!state.current) return;
+  const notes = document.getElementById("refine-notes").value.trim();
+  if (!notes) {
+    toast("Add a note describing what should change.", "error");
+    return;
+  }
+  toast("Re-running planner with your notes…");
+  try {
+    await api(`/api/projects/${state.current}/refine`, {
+      method: "POST",
+      body: JSON.stringify({ notes })
+    });
+    document.getElementById("refine-notes").value = "";
+    document.getElementById("refine-form").classList.add("hidden");
+    toast("New plan ready — review and approve.", "success");
+    await Promise.all([loadDetail(), loadProjects()]);
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+/* --- Preview / publish --- */
+$("#btn-redeploy-preview")?.addEventListener("click", async () => {
+  if (!state.current) return;
+  toast("Triggering preview deploy…");
+  try {
+    const data = await api(`/api/projects/${state.current}/preview`, { method: "POST" });
+    toast(data.result?.previewUrl ? "Preview deploying… it may take 1–2 min." : "Preview triggered.", "success");
+    setTimeout(loadDetail, 2000);
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+$("#btn-publish")?.addEventListener("click", async () => {
+  if (!state.current) return;
+  if (!confirm("Publish the preview to your production URL?")) return;
+  try {
+    const data = await api(`/api/projects/${state.current}/publish`, { method: "POST" });
+    toast(data.result?.productionUrl ? "Published." : "Publish triggered.", "success");
+    await loadDetail();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
 
 /* --- Helpers --- */
 function escapeHtml(s) {

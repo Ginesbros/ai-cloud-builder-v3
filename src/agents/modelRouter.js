@@ -36,11 +36,13 @@ const DEV_TYPE_MODEL_OVERRIDES = {
 };
 
 const DEV_TYPE_DEFAULTS = {
+  // Default to mini across the board so a single task can't exceed free-tier
+  // TPM limits. Debugger escalates to full gpt-4.1 only on retry.
   setup: "gpt-4.1-mini",
   frontend: "gpt-4.1-mini",
-  backend: "gpt-4.1",
-  database: "gpt-4.1",
-  integration: "gpt-4.1",
+  backend: "gpt-4.1-mini",
+  database: "gpt-4.1-mini",
+  integration: "gpt-4.1-mini",
   test: "gpt-4.1-mini",
   deploy: "gpt-4.1-mini"
 };
