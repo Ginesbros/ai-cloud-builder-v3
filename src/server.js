@@ -418,10 +418,19 @@ app.get("/debug/env-safe", requireAdminToken, async (_req, res) => {
     openaiKeyPresent: Boolean(process.env.OPENAI_API_KEY),
     githubTokenPresent: Boolean(process.env.GITHUB_TOKEN),
     perplexityKeyPresent: Boolean(process.env.PERPLEXITY_API_KEY),
+    perplexityKeyLength: (process.env.PERPLEXITY_API_KEY || "").length,
+    perplexityKeyPrefix: (process.env.PERPLEXITY_API_KEY || "").slice(0, 5),
     anthropicKeyPresent: Boolean(process.env.ANTHROPIC_API_KEY),
     geminiKeyPresent: Boolean(process.env.GOOGLE_GEMINI_API_KEY),
     grokKeyPresent: Boolean(process.env.XAI_API_KEY),
-    vercelTokenPresent: Boolean(process.env.VERCEL_TOKEN)
+    manusKeyPresent: Boolean(process.env.MANUS_API_KEY),
+    higgsfieldKeyPresent: Boolean(process.env.HIGGSFIELD_API_KEY),
+    vercelTokenPresent: Boolean(process.env.VERCEL_TOKEN),
+    adminTokenPresent: Boolean(process.env.ADMIN_TOKEN),
+    // Show ALL env var names that look like API keys, so typos are visible.
+    apiKeyEnvVarNames: Object.keys(process.env)
+      .filter(k => /API_KEY|TOKEN|SUPABASE/i.test(k))
+      .sort()
   });
 });
 
