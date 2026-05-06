@@ -8,7 +8,7 @@ router picks the best-of-breed model for that type at execution time.
 
 | Role | Primary model | Why this model | When it runs |
 |---|---|---|---|
-| **Planner** | Claude Opus 4 (claude-opus-4-5) | Best long-form reasoning, breaks goals into clean executable tasks | Once per project (`createProject`) |
+| **Planner** | Claude Opus 4 (claude-opus-4-7) | Best long-form reasoning, breaks goals into clean executable tasks | Once per project (`createProject`) |
 | **Researcher** | Perplexity Sonar Pro | Live web search with citations for tech choices, packages, breaking-change risks | Inside the planner, before the plan JSON is written |
 | **Librarian** | NotebookLM | Digests PDFs/docs the user attaches into structured context | Inside the planner when `goal` includes attached docs |
 | **Developer** | GPT-4.1-mini (default) — escalates per task type below | Cheap, fast, extremely capable for code generation | Every `development`/`frontend`/`backend` task |
@@ -56,10 +56,10 @@ touching code. Defaults shown:
 ```
 # Planner / debugger / reviewer
 PLANNER_PROVIDER=anthropic                 # openai | anthropic
-PLANNER_MODEL=claude-opus-4-5
+PLANNER_MODEL=claude-opus-4-7
 DEBUGGER_PROVIDER=openai
 OPENAI_DEBUGGER_MODEL=gpt-4.1
-REVIEWER_CLAUDE_MODEL=claude-sonnet-4-5
+REVIEWER_CLAUDE_MODEL=claude-sonnet-4-6
 REVIEWER_GEMINI_MODEL=gemini-2.5-pro
 REVIEWER_GROK_MODEL=grok-4
 

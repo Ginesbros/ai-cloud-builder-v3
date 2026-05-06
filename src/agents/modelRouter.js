@@ -61,7 +61,7 @@ export function getModelForRole(role, taskType = null) {
   const r = (role || "").toLowerCase();
 
   if (r === "planner") {
-    return process.env.PLANNER_MODEL || "claude-opus-4-5";
+    return process.env.PLANNER_MODEL || "claude-opus-4-7";
   }
   if (r === "developer") {
     return getDeveloperModel(taskType);
@@ -90,7 +90,7 @@ export function getModelForRole(role, taskType = null) {
   }
   // Reviewer sub-roles (used by reviewer.js):
   if (r === "reviewer_claude") {
-    return process.env.REVIEWER_CLAUDE_MODEL || process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-5";
+    return process.env.REVIEWER_CLAUDE_MODEL || process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-6";
   }
   if (r === "reviewer_gemini") {
     return process.env.REVIEWER_GEMINI_MODEL || process.env.GEMINI_ANALYZER_MODEL || "gemini-2.5-pro";

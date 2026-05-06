@@ -9,9 +9,9 @@ function isConfigured() {
 }
 
 function pickModel(role) {
-  if (role === "planner") return process.env.PLANNER_MODEL || "claude-opus-4-5";
+  if (role === "planner") return process.env.PLANNER_MODEL || "claude-opus-4-7";
   if (role === "reviewer_claude") return getModelForRole("reviewer_claude");
-  return process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-5";
+  return process.env.CLAUDE_REVIEWER_MODEL || "claude-sonnet-4-6";
 }
 
 /**
