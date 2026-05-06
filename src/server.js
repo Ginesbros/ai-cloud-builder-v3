@@ -31,6 +31,15 @@ app.use(cors());
 app.use(express.json({ limit: "15mb" }));
 
 // --- Static dashboard ---
+// Serve dashboard with no-cache so JS/CSS updates always load fresh.
+app.use((req, res, next) => {
+  if (req.path.endsWith(".html") || req.path === "/" || req.path.endsWith(".js") || req.path.endsWith(".css")) {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 // --- Public health ---

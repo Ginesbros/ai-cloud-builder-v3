@@ -523,6 +523,11 @@ async function checkTermsAndShowModal() {
   try {
     const status = await api("/api/terms/status");
     document.getElementById("tos-version").textContent = status.currentVersion || "1.0.0";
+    // Bypass mode: server reports ToS not required — hide the modal forever for this session.
+    if (status.bypassed === true || status.acceptedVersion === "bypass") {
+      document.getElementById("tos-modal")?.classList?.add("hidden");
+      return true;
+    }
     if (status.banned) {
       // Banned users see a hard message and can't dismiss.
       const modal = document.getElementById("tos-modal");
