@@ -476,6 +476,26 @@ form button[type="submit"] { width: 100%; margin-top: 12px; }
 /* Kind chip */
 .chip.kind { background: rgba(167, 139, 250, 0.15); color: #a78bfa; border-color: rgba(167, 139, 250, 0.3); }
 
+/* Connection cards */
+.connection-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  margin-bottom: 10px;
+  align-items: center;
+}
+.connection-card .c-name { font-family: var(--font-head); font-size: 14px; font-weight: 600; color: var(--text); }
+.connection-card .c-status { font-size: 11px; margin-top: 4px; }
+.connection-card .c-status.ok { color: var(--success); }
+.connection-card .c-status.warn { color: var(--warn); }
+.connection-card .c-status.err { color: var(--error); }
+.connection-card .c-status.muted { color: var(--text-dim); }
+.connection-card .c-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
 /* Modal (Terms of Service) */
 .modal {
   position: fixed; inset: 0;

@@ -510,6 +510,121 @@ async function openTosModal({ requireAcceptance = false } = {}) {
   }
 }
 
+/* --- Connections panel + Higgsfield re-auth --- */
+const hfState = { deviceCode: null, expiresAt: 0 };
+
+async function openConnections() {
+  const modal = document.getElementById("connections-modal");
+  const cards = document.getElementById("connection-cards");
+  modal.classList.remove("hidden");
+  cards.innerHTML = `<div class="muted">Loading…</div>`;
+  try {
+    const status = await api("/api/oauth/higgsfield/status");
+    const hf = renderHiggsfieldCard(status);
+    cards.innerHTML = hf;
+    document.getElementById("hf-reauth-btn")?.addEventListener("click", openHiggsfieldAuth);
+  } catch (err) {
+    cards.innerHTML = `<div class="muted">Failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderHiggsfieldCard(s) {
+  let statusLine, statusClass, btnLabel;
+  if (!s.configured) {
+    statusLine = "Not configured — video pipeline disabled.";
+    statusClass = "muted";
+    btnLabel = "Authorize Higgsfield";
+  } else if (s.needsReauth) {
+    statusLine = `Refresh token expired ${fmtRel(s.refreshExpiresAt)} — re-authorize required.`;
+    statusClass = "err";
+    btnLabel = "Re-authorize";
+  } else if (s.accessExpired) {
+    statusLine = "Access token expired — will auto-refresh on next use.";
+    statusClass = "warn";
+    btnLabel = "Re-authorize";
+  } else {
+    statusLine = `Connected. Refresh expires ${fmtRel(s.refreshExpiresAt)}.`;
+    statusClass = "ok";
+    btnLabel = "Re-authorize";
+  }
+  return `
+    <div class="connection-card">
+      <div>
+        <div class="c-name">Higgsfield (video)</div>
+        <div class="c-status ${statusClass}">${escapeHtml(statusLine)}</div>
+        ${s.accessExpiresAt ? `<div class="c-meta">Access: expires ${fmtRel(s.accessExpiresAt)}</div>` : ""}
+      </div>
+      <button class="btn" id="hf-reauth-btn">${btnLabel}</button>
+    </div>
+  `;
+}
+
+function openHiggsfieldAuth() {
+  document.getElementById("connections-modal").classList.add("hidden");
+  document.getElementById("higgsfield-auth-modal").classList.remove("hidden");
+  document.getElementById("hf-step1").classList.remove("hidden");
+  document.getElementById("hf-step2").classList.add("hidden");
+  document.getElementById("hf-step3").classList.add("hidden");
+}
+
+async function startHiggsfieldFlow() {
+  const startBtn = document.getElementById("hf-start");
+  startBtn.disabled = true;
+  startBtn.textContent = "Starting…";
+  try {
+    const r = await api("/api/oauth/higgsfield/authorize", { method: "POST", body: "{}" });
+    hfState.deviceCode = r.device_code;
+    hfState.expiresAt = Date.now() + (r.expires_in || 900) * 1000;
+    document.getElementById("hf-verify-link").href = r.verification_uri;
+    document.getElementById("hf-verify-link").textContent = r.verification_uri;
+    const mins = Math.round((r.expires_in || 900) / 60);
+    document.getElementById("hf-expiry").textContent = `Code expires in ~${mins} minutes.`;
+    document.getElementById("hf-step1").classList.add("hidden");
+    document.getElementById("hf-step2").classList.remove("hidden");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    startBtn.disabled = false;
+    startBtn.textContent = "Start authorization";
+  }
+}
+
+async function claimHiggsfieldTokens() {
+  if (!hfState.deviceCode) return;
+  if (Date.now() > hfState.expiresAt) {
+    toast("Authorization code expired — starting fresh.", "error");
+    document.getElementById("hf-step1").classList.remove("hidden");
+    document.getElementById("hf-step2").classList.add("hidden");
+    return;
+  }
+  const claimBtn = document.getElementById("hf-claim");
+  claimBtn.disabled = true;
+  claimBtn.textContent = "Fetching tokens…";
+  try {
+    const r = await api("/api/oauth/higgsfield/poll", {
+      method: "POST",
+      body: JSON.stringify({ device_code: hfState.deviceCode })
+    });
+    if (r.ok) {
+      document.getElementById("hf-step2").classList.add("hidden");
+      document.getElementById("hf-step3").classList.remove("hidden");
+      toast("Higgsfield connected.", "success");
+    } else {
+      const detail = r.detail || "unknown";
+      if (detail === "authorization_pending") {
+        toast("Still pending — click Approve on Higgsfield first, then try again.", "error");
+      } else {
+        toast(`Failed: ${detail}`, "error");
+      }
+    }
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    claimBtn.disabled = false;
+    claimBtn.textContent = "I approved — fetch tokens";
+  }
+}
+
 /* --- Library tab --- */
 async function loadLibrary() {
   const ul = document.getElementById("library-list");
@@ -596,6 +711,17 @@ async function init() {
   // Tab switch to library should load it (lazy).
   document.querySelectorAll(".tab[data-tab='library']").forEach(btn => {
     btn.addEventListener("click", loadLibrary);
+  });
+
+  // Connections modal wiring.
+  document.getElementById("open-connections").addEventListener("click", openConnections);
+  document.getElementById("close-connections").addEventListener("click", () => {
+    document.getElementById("connections-modal").classList.add("hidden");
+  });
+  document.getElementById("hf-start").addEventListener("click", startHiggsfieldFlow);
+  document.getElementById("hf-claim").addEventListener("click", claimHiggsfieldTokens);
+  document.getElementById("hf-close").addEventListener("click", () => {
+    document.getElementById("higgsfield-auth-modal").classList.add("hidden");
   });
 
   // Gate everything else on terms acceptance.

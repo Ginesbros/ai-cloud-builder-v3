@@ -17,6 +17,7 @@
       </div>
       <div class="topbar-right">
         <div class="budget-pill" id="budget-pill">Budget: —</div>
+        <button class="btn ghost" id="open-connections" title="Manage connections">⚡ Connections</button>
         <button class="btn ghost" id="refresh-btn" title="Refresh">↻ Refresh</button>
       </div>
     </header>
@@ -158,6 +159,50 @@
     </main>
 
     <div id="toast" class="toast hidden"></div>
+
+    <!-- Connections modal -->
+    <div id="connections-modal" class="modal hidden">
+      <div class="modal-card">
+        <h2 class="modal-title">Connections</h2>
+        <p class="muted" style="margin-bottom:18px">
+          Manage authenticated providers. Tokens that expire are listed here so you can re-authorize before video / specialist tasks fail.
+        </p>
+
+        <div id="connection-cards"></div>
+
+        <div class="modal-actions">
+          <button class="btn ghost" id="close-connections">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Higgsfield device-flow modal (drives the re-auth flow) -->
+    <div id="higgsfield-auth-modal" class="modal hidden">
+      <div class="modal-card">
+        <h2 class="modal-title">Re-authorize Higgsfield</h2>
+        <div id="hf-step1">
+          <p class="muted" style="margin-bottom:14px">
+            Click below to start the device-flow. You'll be given a link to open on Higgsfield, approve, then come back here.
+          </p>
+          <button class="btn primary" id="hf-start">Start authorization</button>
+        </div>
+        <div id="hf-step2" class="hidden">
+          <p class="muted" style="margin-bottom:6px">Open this link, log in to Higgsfield if needed, then click <strong>Approve</strong>:</p>
+          <a id="hf-verify-link" class="btn primary" target="_blank" rel="noopener" style="display:block; word-break:break-all; margin-bottom:14px;">Open Higgsfield approval page</a>
+          <p class="muted" style="margin-bottom:6px">After you click Approve, click below — we'll fetch and save the tokens automatically.</p>
+          <p class="muted" id="hf-expiry" style="font-size:11px; margin-bottom:14px"></p>
+          <button class="btn primary" id="hf-claim">I approved — fetch tokens</button>
+        </div>
+        <div id="hf-step3" class="hidden">
+          <p style="color: var(--success); margin-bottom:14px">
+            ✓ Tokens saved. Higgsfield video pipeline is ready.
+          </p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn ghost" id="hf-close">Close</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Terms of Service modal (first visit gate) -->
     <div id="tos-modal" class="modal hidden">
