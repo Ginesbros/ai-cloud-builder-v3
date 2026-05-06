@@ -1,27 +1,51 @@
 /**
- * Higgsfield — text-to-video generation for marketing/demo videos.
+ * Higgsfield client — wraps text-to-video generation.
  *
- * Higgsfield's public API is job-based (submit prompt → poll job → fetch
- * MP4 URL). We model that here. If your Higgsfield account uses different
- * paths, override HIGGSFIELD_BASE_URL.
+ * Auth strategy:
+ *   1. If HIGGSFIELD_API_KEY env is set → use as static Bearer (fallback).
+ *   2. Otherwise try OAuth tokens stored in oauth_tokens table; auto-refresh
+ *      if expired. Throws OAUTH_REAUTH_REQUIRED when refresh token is gone.
  *
- * Requires: HIGGSFIELD_API_KEY
+ * Endpoints:
+ *   submit  POST {BASE}/v1/text-to-video
+ *   poll    GET  {BASE}/v1/jobs/:id
+ *
+ * Default base URL is the MCP / API gateway. Override with HIGGSFIELD_BASE_URL.
  */
 
 import axios from "axios";
 import { supabase } from "../lib/supabase.js";
+import { getAccessToken, getProviderStatus } from "../lib/oauthStore.js";
 
 const BASE = process.env.HIGGSFIELD_BASE_URL || "https://api.higgsfield.ai";
+const PROVIDER = "higgsfield";
 
-function isConfigured() {
-  return Boolean(process.env.HIGGSFIELD_API_KEY);
+async function authHeader() {
+  // Static key wins if explicitly provided (lets you swap to a service key later).
+  if (process.env.HIGGSFIELD_API_KEY) {
+    return `Bearer ${process.env.HIGGSFIELD_API_KEY}`;
+  }
+  try {
+    const { token, tokenType } = await getAccessToken(PROVIDER);
+    return `${tokenType || "Bearer"} ${token}`;
+  } catch (err) {
+    // Bubble up so callers can return a clean "not configured" message.
+    throw err;
+  }
 }
 
-function client() {
+async function isConfigured() {
+  if (process.env.HIGGSFIELD_API_KEY) return true;
+  const status = await getProviderStatus(PROVIDER).catch(() => ({ configured: false }));
+  return status.configured && !status.needsReauth;
+}
+
+async function client() {
+  const auth = await authHeader();
   return axios.create({
     baseURL: BASE,
     headers: {
-      Authorization: `Bearer ${process.env.HIGGSFIELD_API_KEY}`,
+      Authorization: auth,
       "Content-Type": "application/json"
     },
     timeout: 60000
@@ -29,8 +53,7 @@ function client() {
 }
 
 /**
- * Submit a video generation job.
- * Returns: { jobId, status } or { error }
+ * Submit a text-to-video job.
  */
 export async function submitVideoJob({
   prompt,
@@ -39,12 +62,16 @@ export async function submitVideoJob({
   projectId = null,
   taskId = null
 }) {
-  if (!isConfigured()) {
-    return { error: "Higgsfield not configured (HIGGSFIELD_API_KEY missing)." };
+  if (!(await isConfigured())) {
+    return {
+      error:
+        "Higgsfield not configured (no HIGGSFIELD_API_KEY env and no valid OAuth token in oauth_tokens). Run device-auth flow."
+    };
   }
 
   try {
-    const response = await client().post("/v1/text-to-video", {
+    const c = await client();
+    const response = await c.post("/v1/text-to-video", {
       prompt,
       duration: durationSeconds,
       aspect_ratio: aspectRatio,
@@ -87,13 +114,11 @@ export async function submitVideoJob({
   }
 }
 
-/**
- * Poll a Higgsfield video job once.
- */
 export async function pollVideoJob({ jobId }) {
-  if (!isConfigured()) return { error: "Higgsfield not configured." };
+  if (!(await isConfigured())) return { error: "Higgsfield not configured." };
   try {
-    const response = await client().get(`/v1/jobs/${jobId}`);
+    const c = await client();
+    const response = await c.get(`/v1/jobs/${jobId}`);
     return {
       status: response.data?.status,
       videoUrl: response.data?.output?.url || response.data?.video_url,
@@ -102,4 +127,12 @@ export async function pollVideoJob({ jobId }) {
   } catch (err) {
     return { error: err?.message };
   }
+}
+
+export async function getHiggsfieldStatus() {
+  if (process.env.HIGGSFIELD_API_KEY) {
+    return { mode: "static_key", configured: true };
+  }
+  const status = await getProviderStatus(PROVIDER).catch(() => ({ configured: false }));
+  return { mode: "oauth", ...status };
 }

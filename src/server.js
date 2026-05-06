@@ -15,6 +15,8 @@ import {
 import { getDeliverableUrl } from "./lib/storage.js";
 import { listKinds } from "./pipelines/index.js";
 import { getTerms, hasAccepted, recordAcceptance, isBanned } from "./services/terms.js";
+import { getProviderStatus, persistTokens } from "./lib/oauthStore.js";
+import axios from "axios";
 import { getBudgetConfig, getMonthlyEstimatedSpend } from "./services/budget.js";
 import { deployProjectToVercel } from "./services/vercel.js";
 
@@ -112,6 +114,54 @@ app.get("/api/projects", async (_req, res) => {
 
 app.get("/api/kinds", (_req, res) => {
   res.json({ ok: true, kinds: listKinds() });
+});
+
+// --- OAuth re-auth (Higgsfield device flow) ---
+// Admin-gated because device-flow tokens grant access to your billable services.
+app.post("/api/oauth/:provider/authorize", requireAdminToken, async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (provider !== "higgsfield") return res.status(400).json({ ok: false, error: "Unsupported provider." });
+    const r = await axios.post(
+      "https://fnf-device-auth.higgsfield.ai/authorize",
+      {},
+      { headers: { "Content-Type": "application/json" }, timeout: 30000 }
+    );
+    res.json({ ok: true, ...r.data });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+app.post("/api/oauth/:provider/poll", requireAdminToken, async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    const { device_code } = req.body || {};
+    if (provider !== "higgsfield") return res.status(400).json({ ok: false, error: "Unsupported provider." });
+    if (!device_code) return res.status(400).json({ ok: false, error: "device_code required." });
+
+    const r = await axios.post(
+      "https://fnf-device-auth.higgsfield.ai/token",
+      { device_code },
+      { headers: { "Content-Type": "application/json" }, timeout: 30000, validateStatus: () => true }
+    );
+    if (r.status !== 200) {
+      return res.json({ ok: false, status: r.status, detail: r.data?.detail });
+    }
+    const result = await persistTokens(provider, r.data);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+app.get("/api/oauth/:provider/status", requireAdminToken, async (req, res) => {
+  try {
+    const status = await getProviderStatus(req.params.provider);
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message });
+  }
 });
 
 // --- Terms of Service ---

@@ -164,5 +164,44 @@ create index if not exists idx_tasks_status_lock on tasks(status, locked_until);
 create index if not exists idx_logs_project_created on logs(project_id, created_at desc);
 create index if not exists idx_ai_usage_created on ai_usage(created_at desc);
 
+-- OAuth token storage (Higgsfield + future providers)
+create table if not exists oauth_tokens (
+  id uuid primary key default uuid_generate_v4(),
+  provider text not null,
+  access_token text not null,
+  refresh_token text,
+  token_type text default 'Bearer',
+  access_expires_at timestamptz not null,
+  refresh_expires_at timestamptz,
+  scope text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(provider)
+);
+create index if not exists idx_oauth_provider on oauth_tokens(provider);
+
+-- ToS + ban tracking
+create table if not exists tos_acceptances (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text not null,
+  user_email text,
+  terms_version text not null,
+  ip_address text,
+  user_agent text,
+  accepted_at timestamptz not null default now()
+);
+create index if not exists idx_tos_user on tos_acceptances(user_id, accepted_at desc);
+create index if not exists idx_tos_version on tos_acceptances(terms_version);
+
+create table if not exists banned_users (
+  id uuid primary key default uuid_generate_v4(),
+  user_id text unique not null,
+  reason text,
+  banned_at timestamptz not null default now(),
+  banned_by text
+);
+create index if not exists idx_banned_users_id on banned_users(user_id);
+
 -- Useful reset query during testing:
 -- update tasks set status = 'pending', assigned_worker_id = null, locked_until = null, attempts = 0;
