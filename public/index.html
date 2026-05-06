@@ -219,25 +219,13 @@
       </div>
     </div>
 
-    <!-- Terms of Service modal (first visit gate) -->
-    <div id="tos-modal" class="modal hidden">
-      <div class="modal-card">
-        <h2 class="modal-title">Before you build — our Terms of Service</h2>
-        <p class="muted" style="margin-bottom:14px">
-          Please read carefully. The most important parts:
-          <strong>we own the generated code, but you get a perpetual license to use it however you want.</strong>
-          We can also terminate access at our discretion.
-        </p>
-        <div id="tos-content" class="tos-scroll">Loading…</div>
-        <label class="tos-check">
-          <input type="checkbox" id="tos-check" />
-          I have read and agree to the Terms of Service.
-        </label>
-        <div class="modal-actions">
-          <a class="btn ghost" id="tos-decline" href="about:blank">I do not agree</a>
-          <button class="btn primary" id="tos-accept" disabled>Accept &amp; Continue</button>
-        </div>
-      </div>
+    <!-- Terms of Service modal removed in single-user mode (TOS_ENABLED=false). -->
+    <!-- Stub elements kept so dashboard JS that references them by id doesn't crash. -->
+    <div id="tos-modal" class="hidden" style="display:none !important">
+      <div id="tos-content" style="display:none"></div>
+      <input type="checkbox" id="tos-check" style="display:none" />
+      <button id="tos-accept" style="display:none"></button>
+      <a id="tos-decline" href="about:blank" style="display:none"></a>
     </div>
 
     <footer class="site-footer">
