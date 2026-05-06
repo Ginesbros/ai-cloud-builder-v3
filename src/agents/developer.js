@@ -6,13 +6,26 @@ import { safeParseJson } from "./jsonUtils.js";
  * This is what makes reuse cheap and fast — the developer LLM is given a
  * working past component to copy/adapt instead of generating from scratch.
  */
+// Hard cap on file content lengths to keep prompts under provider TPM limits.
+// gpt-4.1-mini supports 200k TPM but we still want fast/cheap iterations.
+const MAX_FILE_CHARS = 1500;          // per existing file preview
+const MAX_LIBRARY_FILE_CHARS = 4000;  // per library reference file
+const MAX_LIBRARY_FILES = 8;          // limit how many library files inline
+const MAX_EXISTING_FILES = 30;        // limit how many existing files inline
+
+function truncate(str, max) {
+  if (typeof str !== "string") return "";
+  if (str.length <= max) return str;
+  return str.slice(0, max) + `\n/* …truncated, ${str.length - max} chars omitted… */`;
+}
+
 function libraryBlock(libraryMatch) {
   if (!libraryMatch || libraryMatch.decision === "fresh" || !libraryMatch.chosen) return "";
 
   const c = libraryMatch.chosen;
-  const filesPreview = (c.files || []).map(f => ({
+  const filesPreview = (c.files || []).slice(0, MAX_LIBRARY_FILES).map(f => ({
     path: f.path,
-    content: f.content
+    content: truncate(f.content, MAX_LIBRARY_FILE_CHARS)
   }));
 
   if (libraryMatch.decision === "reuse") {
@@ -47,10 +60,20 @@ ${JSON.stringify(filesPreview, null, 2)}
 }
 
 export async function executeDevelopmentTask({ project, task, existingFiles, libraryMatch = null }) {
-  const previewFiles = (existingFiles || []).map(file => ({
+  // Sort existing files by recency so we keep the most relevant ones first,
+  // then cap the count and per-file size so the prompt stays small.
+  const sortedFiles = (existingFiles || [])
+    .slice()
+    .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
+    .slice(0, MAX_EXISTING_FILES);
+  const previewFiles = sortedFiles.map(file => ({
     path: file.path,
-    preview: typeof file.content === "string" ? file.content.slice(0, 2000) : ""
+    preview: truncate(file.content, MAX_FILE_CHARS)
   }));
+  const omittedCount = (existingFiles || []).length - previewFiles.length;
+  const omittedNote = omittedCount > 0
+    ? `\n(${omittedCount} older files omitted from this prompt; modify by name if needed.)`
+    : "";
 
   const guidance = libraryBlock(libraryMatch);
 
@@ -73,8 +96,8 @@ Task:
 ${task.title}
 ${task.description}
 
-Existing files (path + preview):
-${JSON.stringify(previewFiles)}
+Existing files (path + preview, most-recent first):
+${JSON.stringify(previewFiles)}${omittedNote}
 
 ${guidance}
 
