@@ -11,6 +11,7 @@ import { createRepoIfNeeded, upsertFilesToGitHub } from "./github.js";
 import { runSandboxCommand } from "../sandbox/sandboxManager.js";
 import { runSmokeForProject } from "../sandbox/smokeRunner.js";
 import { saveDeliverable } from "../lib/storage.js";
+import { estimateProjectCost, recordActualCost } from "./costEstimator.js";
 import {
   assertBudgetAvailable,
   getBudgetConfig,
@@ -146,7 +147,21 @@ async function planProject({ project, goal, name, classification, clarifications
     message: `Planned: ${tasks.length} tasks for kind=${classification.kind}`,
     data: { plan, kind: classification.kind }
   });
-  return { ok: true, project: updated, tasksCreated: tasks.length, classification };
+
+  // Generate cost estimate (best-effort, never blocks build).
+  let estimate = null;
+  try {
+    estimate = await estimateProjectCost(updated.id);
+  } catch (err) {
+    await logEvent({
+      projectId: updated.id,
+      level: "warn",
+      message: "Cost estimate generation failed.",
+      data: { error: err.message }
+    });
+  }
+
+  return { ok: true, project: updated, tasksCreated: tasks.length, classification, estimate };
 }
 
 /**
@@ -485,6 +500,8 @@ export async function runNextTask(projectId) {
       status: "complete", current_stage: "complete",
       updated_at: new Date().toISOString()
     }).eq("id", projectId);
+    // Record estimate vs actual for calibration.
+    await recordActualCost(projectId).catch(() => null);
     await logEvent({ projectId, message: "Project complete." });
     return { done: true, message: "No pending tasks." };
   }

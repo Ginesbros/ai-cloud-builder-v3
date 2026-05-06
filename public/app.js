@@ -190,6 +190,34 @@ function renderDetail() {
     })
     .join("");
 
+  // Estimate banner — shown when project has cost_estimate AND has not started yet (or just before run)
+  const estBanner = document.getElementById("estimate-banner");
+  const est = p.cost_estimate;
+  if (est && p.status !== "complete" && p.status !== "failed") {
+    document.getElementById("estimate-value").textContent = `$${Number(est.expected || 0).toFixed(2)}`;
+    document.getElementById("estimate-range").textContent =
+      `Range: $${Number(est.low || 0).toFixed(2)} – $${Number(est.high || 0).toFixed(2)} · confidence ${Math.round((est.confidence || 0) * 100)}%`;
+    const methodLabel =
+      est.method === "historical" ? `Based on ${(est.comparables || []).length} similar past build(s)`
+      : est.method === "llm" ? "LLM-projected (no comparables yet)"
+      : "Fallback estimate";
+    document.getElementById("estimate-method").textContent = methodLabel;
+
+    const compEl = document.getElementById("estimate-comparables");
+    if ((est.comparables || []).length > 0) {
+      compEl.innerHTML = `Similar past builds:<ul>${
+        est.comparables.map(c => `<li>${escapeHtml(c.name)} — $${Number(c.cost).toFixed(2)} (${Math.round(c.similarity * 100)}% match)</li>`).join("")
+      }</ul>`;
+    } else if (est.reasoning) {
+      compEl.innerHTML = `<em>${escapeHtml(est.reasoning)}</em>`;
+    } else {
+      compEl.innerHTML = "";
+    }
+    estBanner.classList.remove("hidden");
+  } else {
+    estBanner.classList.add("hidden");
+  }
+
   // Clarification banner
   const banner = document.getElementById("clarification-banner");
   const qContainer = document.getElementById("clarification-questions");
@@ -438,6 +466,23 @@ $("#btn-deploy").addEventListener("click", async () => {
     await loadDetail();
   } catch (err) {
     toast(err.message, "error");
+  }
+});
+
+$("#refresh-estimate").addEventListener("click", async () => {
+  if (!state.current) return;
+  const btn = document.getElementById("refresh-estimate");
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    await api(`/api/projects/${state.current}/estimate`, { method: "POST", body: "{}" });
+    await loadDetail();
+    toast("Estimate refreshed.", "success");
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Refresh";
   }
 });
 

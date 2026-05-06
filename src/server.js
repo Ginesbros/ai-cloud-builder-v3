@@ -12,6 +12,7 @@ import {
   runAutonomousProject,
   submitClarifications
 } from "./services/orchestrator.js";
+import { estimateProjectCost } from "./services/costEstimator.js";
 import { getDeliverableUrl } from "./lib/storage.js";
 import { listKinds } from "./pipelines/index.js";
 import { getTerms, hasAccepted, recordAcceptance, isBanned } from "./services/terms.js";
@@ -346,6 +347,15 @@ app.get("/api/projects/:projectId", async (req, res) => {
       ok: false,
       error: error?.message || JSON.stringify(error)
     });
+  }
+});
+
+app.post("/api/projects/:projectId/estimate", async (req, res) => {
+  try {
+    const estimate = await estimateProjectCost(req.params.projectId);
+    res.json({ ok: true, estimate });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message });
   }
 });
 

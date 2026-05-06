@@ -85,6 +85,21 @@
             </div>
           </header>
 
+          <div id="estimate-banner" class="estimate hidden">
+            <div style="display:flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;">
+              <div>
+                <div class="estimate-label">Estimated cost to complete this build</div>
+                <div class="estimate-value" id="estimate-value">$0.00</div>
+                <div class="estimate-range" id="estimate-range">—</div>
+              </div>
+              <div style="text-align: right;">
+                <div class="estimate-method" id="estimate-method">—</div>
+                <button class="btn tiny" id="refresh-estimate">Refresh</button>
+              </div>
+            </div>
+            <div id="estimate-comparables" class="estimate-comparables"></div>
+          </div>
+
           <div id="clarification-banner" class="clarification hidden">
             <div class="clarification-head">
               <strong>A few quick questions before I start</strong>
